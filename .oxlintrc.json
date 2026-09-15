@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "promise", "import", "react"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "rules": {
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/consistent-type-imports": "error",
+    "eslint/no-console": ["error", { "allow": ["warn", "error"] }],
+    "eslint/eqeqeq": "error",
+    "eslint/prefer-const": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "import/no-cycle": "error",
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+    "typescript/consistent-return": "off",
+    "typescript/no-unnecessary-type-parameters": "off"
+  },
+  "ignorePatterns": ["out/", "dist/", "release/", "node_modules/"],
+  "overrides": [
+    {
+      "files": ["src/renderer/**/*.tsx"],
+      "rules": { "react/react-in-jsx-scope": "off" }
+    },
+    {
+      "files": ["**/*.test.ts"],
+      "rules": { "eslint/no-console": "off" }
+    }
+  ]
+}
