@@ -10,10 +10,10 @@ Project first: each project is a long-running maintainer agent with an ongoing
 conversation and a project note. Organize work around projects, rather than
 folders and sessions. Inspired by [Cursor Projects](https://cursor.com/blog/projects).
 
-Your workspace and history stay on your machine. Rao uses your agents' existing
-logins, with no backend of its own. Agents connect directly to their model providers.
+Local only: Rao uses your agents' existing
+logins and subscriptions, with no backend of its own. Agents connect directly to their model providers.
 
-Claude Code, Codex, Kimi Code, Pi and Grok Build in one workspace, powered by
+Claude Code, Codex, Kimi Code, Pi and Grok Build, all harnesses in one workspace, powered by
 oar's unified runtime API.
 
 ## Requirements
