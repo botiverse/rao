@@ -4,16 +4,42 @@
 
 # Rao
 
-A local desktop client for coding agents. Rao opens sessions with Claude Code,
-Codex, Kimi Code, Pi and Grok Build through one interface, and gives them a
-window instead of a terminal: streaming transcript, collapsible tool calls and
-reasoning, a status pill that says whether the agent is thinking, running a
-tool, stalled or done, and a composer that steers or queues while a turn runs.
+An elegant local desktop agent workspace built on [oar](https://github.com/botiverse/oar).
 
-Everything stays on your machine. Rao drives the agents you already have
-installed and logged in; it holds no keys and talks to no server of its own.
+## Project first
 
-Runtimes are driven through [`@botiverse/oar`](https://github.com/botiverse/oar).
+Rao organizes agent work around projects. A project brings together a local
+folder, a chosen agent, an ongoing conversation and a saved note—a place to
+return to and keep working.
+
+Use the conversation to move the work forward. Keep the project's direction,
+constraints and useful context in its note. When that context belongs in a
+message, type `@note` to attach it explicitly. The note stays under your control;
+messages without `@note` do not include it automatically.
+
+Each project keeps its own conversation and note, even when several projects
+share the same folder. You can approach the same codebase with different goals
+or agents while keeping each line of work together.
+
+## Local by design
+
+Your files, project metadata and conversation history live on your machine.
+Rao runs your agents locally, uses their existing logins and has no backend of
+its own. Agents still connect to their configured model providers; local-only
+means the workspace and agent execution stay local, not that inference is
+necessarily offline.
+
+## Built on oar
+
+[oar](https://github.com/botiverse/oar) gives Rao a shared interface to Claude
+Code, Codex, Kimi Code, Pi and Grok Build. Choose the agent that fits your project
+and work through the same conversation UI and controls.
+
+Rao focuses on the workspace; oar provides runtime discovery, session control
+and streaming events. The runtime Dashboard lets you inspect available agents,
+models, account usage and diagnostics. Skills, MCP servers and tools are also
+available from the Dashboard and each project's sidebar, where supported by
+the runtime.
 
 ## Requirements
 
@@ -25,7 +51,7 @@ Runtimes are driven through [`@botiverse/oar`](https://github.com/botiverse/oar)
 
 ```sh
 pnpm install
-pnpm dev          # electron-vite dev server with HMR for the renderer
+pnpm dev          # renderer HMR + main/preload rebuild and app restart
 pnpm check        # typecheck + lint + format check + tests
 pnpm build        # bundle main, preload and renderer into out/
 pnpm package:mac  # build a .dmg and .zip into release/
