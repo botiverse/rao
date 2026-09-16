@@ -8,7 +8,7 @@ An elegant local desktop agent workspace built on [oar](https://github.com/botiv
 
 Project first: each project is a long-running maintainer agent with an ongoing
 conversation and a project note. Organize work around projects, rather than
-folders and sessions.
+folders and sessions. Inspired by [Cursor Projects](https://cursor.com/blog/projects).
 
 Your workspace and history stay on your machine. Rao uses your agents' existing
 logins, with no backend of its own. Agents connect directly to their model providers.
