@@ -8,38 +8,18 @@ An elegant local desktop agent workspace built on [oar](https://github.com/botiv
 
 ## Project first
 
-Rao organizes agent work around projects. A project brings together a local
-folder, a chosen agent, an ongoing conversation and a saved note—a place to
-return to and keep working.
-
-Use the conversation to move the work forward. Keep the project's direction,
-constraints and useful context in its note. When that context belongs in a
-message, type `@note` to attach it explicitly. The note stays under your control;
-messages without `@note` do not include it automatically.
-
-Each project keeps its own conversation and note, even when several projects
-share the same folder. You can approach the same codebase with different goals
-or agents while keeping each line of work together.
+A local folder, an agent, an ongoing conversation and a project note.
+Keep each project's context together and pick up where you left off.
 
 ## Local by design
 
-Your files, project metadata and conversation history live on your machine.
-Rao runs your agents locally, uses their existing logins and has no backend of
-its own. Agents still connect to their configured model providers; local-only
-means the workspace and agent execution stay local, not that inference is
-necessarily offline.
+Your workspace and history stay on your machine. Rao uses your agents' existing
+logins, with no backend of its own. Agents connect directly to their model providers.
 
 ## Built on oar
 
-[oar](https://github.com/botiverse/oar) gives Rao a shared interface to Claude
-Code, Codex, Kimi Code, Pi and Grok Build. Choose the agent that fits your project
-and work through the same conversation UI and controls.
-
-Rao focuses on the workspace; oar provides runtime discovery, session control
-and streaming events. The runtime Dashboard lets you inspect available agents,
-models, account usage and diagnostics. Skills, MCP servers and tools are also
-available from the Dashboard and each project's sidebar, where supported by
-the runtime.
+Claude Code, Codex, Kimi Code, Pi and Grok Build in one workspace, powered by
+oar's unified runtime API.
 
 ## Requirements
 
