@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="build/icon.png" alt="Rao logo" width="96" height="96">
+</p>
+
 # Rao
 
 A local desktop client for coding agents. Rao opens sessions with Claude Code,
