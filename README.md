@@ -16,12 +16,6 @@ logins and subscriptions, with no backend of its own. Agents connect directly to
 Claude Code, Codex, Kimi Code, Pi and Grok Build, all harnesses in one workspace, powered by
 oar's unified runtime API.
 
-## Requirements
-
-- Node.js 24 or newer and pnpm 11 (`corepack enable pnpm`)
-- At least one agent CLI installed: `claude`, `codex`, `kimi`, or `grok`.
-  Pi is bundled through oar's SDK and needs a provider login.
-
 ## Develop
 
 ```sh
@@ -47,10 +41,8 @@ together and how oar's session contract is used.
 
 ## A note on permissions
 
-oar starts runtimes with their interactive approval prompts disabled, because
-an embedded agent that stops at a prompt nobody can see would hang. Treat a Rao
-session like a `--dangerously-skip-permissions` run: point it at a directory
-you are comfortable letting an agent edit.
+oar (and thus rao) starts runtimes with their interactive approval prompts disabled,
+i.e., runs in yolo mode.
 
 ## License
 
