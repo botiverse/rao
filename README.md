@@ -6,17 +6,11 @@
 
 An elegant local desktop agent workspace built on [oar](https://github.com/botiverse/oar).
 
-## Project first
-
-A local folder, an agent, an ongoing conversation and a project note.
-Keep each project's context together and pick up where you left off.
-
-## Local by design
+Project first: a local folder, an agent, an ongoing conversation and a project
+note. Keep each project's context together and pick up where you left off.
 
 Your workspace and history stay on your machine. Rao uses your agents' existing
 logins, with no backend of its own. Agents connect directly to their model providers.
-
-## Built on oar
 
 Claude Code, Codex, Kimi Code, Pi and Grok Build in one workspace, powered by
 oar's unified runtime API.
