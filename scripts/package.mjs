@@ -83,6 +83,19 @@ for (let i = 0; i < queue.length; i++) {
         pkg.peerDependenciesMeta?.[name]?.optional === true,
     );
 }
+// Declare every staged top-level package, including peers, so builder's second
+// dependency collection cannot silently discard them as extraneous.
+const stagedManifest = JSON.parse(readFileSync(join(stage, "package.json"), "utf8"));
+for (const target of installed.keys()) {
+  const pkg = JSON.parse(readFileSync(join(target, "package.json"), "utf8"));
+  if (target === join(stage, "node_modules", pkg.name))
+    stagedManifest.dependencies[pkg.name] = pkg.version;
+}
+writeFileSync(join(stage, "package.json"), JSON.stringify(stagedManifest, null, 2));
+writeFileSync(
+  join(root, "dist", "package-dependencies.json"),
+  JSON.stringify([...installed.keys()].map((target) => target.slice(stage.length + 1))),
+);
 process.stdout.write(`Staged ${installed.size} resolved production packages\n`);
 // Stage has no pnpm symlinks or dev dependencies. Sign only after the final archive is built.
 const require = createRequire(import.meta.url);
@@ -100,6 +113,7 @@ const result = spawnSync(
     stage,
     "--config",
     join(root, "electron-builder.yml"),
+    `--config.afterPack=${join(root, "scripts", "verify-package.cjs")}`,
     `--config.electronVersion=${devDependencies.electron}`,
     `--config.electronDist=${electronDist}`,
     `--config.directories.buildResources=${join(root, "build")}`,

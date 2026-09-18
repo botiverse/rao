@@ -199,8 +199,10 @@ by text or display them as duplicate bubbles. Cancellation remains deferred.
 
 `pnpm package` / `pnpm package:mac` stage the production dependency graph in
 `dist/package` using actual pnpm resolutions, including peers and nested versions.
-The builder archives and signs the final application; no post-signing asar edits
-are required. This preserves ACP's zod peer and distinct minimatch versions.
+Every staged top-level package is declared in the packaging manifest so the builder's
+second dependency collection retains peer dependencies. Before signing,
+`scripts/verify-package.cjs` checks every expected dependency location in the final
+archive and fails the build if any is absent. No post-signing asar edits are required.
 
 After `pnpm check` and `pnpm package`, run:
 
@@ -208,7 +210,9 @@ After `pnpm check` and `pnpm package`, run:
 pnpm test:app "release/0.1.0/mac-arm64/Rao.app/Contents/MacOS/Rao"
 ```
 
-The smoke test creates an isolated data directory, imports legacy metadata from
+On macOS the smoke test first copies the entire app outside the repository, preventing
+missing imports from falling back to development `node_modules`. It creates an isolated
+data directory, imports legacy metadata from
 an HTTP origin, opens the real packaged window at a file origin, edits a note,
 restarts both builds, checks singleton rejection, and verifies unchanged JSONL.
 It exercises Electron's built-in SQLite and packaged OAR dependencies. It never

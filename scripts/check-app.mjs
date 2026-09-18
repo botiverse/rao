@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,9 +13,18 @@ import { setTimeout as delay } from "node:timers/promises";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 const electron = require("electron");
-const packaged = process.argv[2];
+let packaged = process.argv[2];
 assert.ok(packaged, "Pass the packaged Rao executable path");
 const data = mkdtempSync(join(tmpdir(), "rao-sqlite-smoke-"));
+// An app under the repository can accidentally resolve missing dependencies from
+// the repository's node_modules. Test the installed layout outside that tree.
+if (process.platform === "darwin") {
+  const app = resolve(packaged, "../../..");
+  const isolatedApp = join(data, "Rao.app");
+  cpSync(app, isolatedApp, { recursive: true, verbatimSymlinks: true });
+  packaged = join(isolatedApp, "Contents", "MacOS", "Rao");
+}
+
 mkdirSync(join(data, "sessions"));
 const handle = "sqlite-smoke-project";
 const summary = {
@@ -88,7 +97,9 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 async function cdp(port) {
   for (let attempt = 0; attempt < 100; attempt++) {
     try {
-      const pages = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
+      const pages = await fetch(`http://127.0.0.1:${port}/json/list`, {
+        signal: AbortSignal.timeout(500),
+      }).then((r) => r.json());
       const page = pages.find((item) => item.type === "page" && item.webSocketDebuggerUrl);
       if (page) {
         const ws = new WebSocket(page.webSocketDebuggerUrl);
@@ -143,9 +154,11 @@ async function run(binary, dev, expectedNote, nextNote, screenshot = false) {
   let output = "";
   child.stdout.on("data", (chunk) => {
     output += chunk;
+    writeFileSync(join(data, dev ? "development.log" : "packaged.log"), output);
   });
   child.stderr.on("data", (chunk) => {
     output += chunk;
+    writeFileSync(join(data, dev ? "development.log" : "packaged.log"), output);
   });
   let connection;
   try {
