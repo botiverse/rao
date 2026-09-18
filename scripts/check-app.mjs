@@ -1,6 +1,7 @@
 /* eslint-disable no-await-in-loop -- Polling and restart checks depend on the preceding observation. */
 // Real Electron/packaged-app smoke test. Uses only disposable data and mock history.
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -47,19 +48,24 @@ const log =
     text: "Retained JSONL conversation",
   }) + "\n";
 writeFileSync(join(data, "sessions", `${handle}.events.jsonl`), log);
-const legacy = JSON.stringify({
-  version: 0,
-  state: {
-    details: {
-      [handle]: {
-        name: "迁移测试",
-        goal: "目标",
-        context: "知识",
-        avatar: { icon: "Book", color: "#86afe5" },
-      },
-    },
-  },
-});
+const db = new DatabaseSync(join(data, "rao.sqlite"));
+db.exec(`CREATE TABLE projects (
+  id TEXT PRIMARY KEY, details TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL, current_session TEXT, created_at INTEGER NOT NULL DEFAULT 0,
+  creating INTEGER NOT NULL DEFAULT 0, cleanup_pending INTEGER NOT NULL DEFAULT 0
+); PRAGMA user_version = 1;`);
+db.prepare(
+  "INSERT INTO projects (id, details, updated_at, current_session) VALUES (?, ?, 1, ?)",
+).run(
+  handle,
+  JSON.stringify({
+    name: "迁移测试",
+    note: "目标\n\n知识",
+    avatar: { icon: "Book", color: "#86afe5" },
+  }),
+  handle,
+);
+db.close();
 const server = createServer((request, response) => {
   const path = new URL(request.url, "http://localhost").pathname;
   const target = path === "/" ? "index.html" : path.slice(1);
@@ -68,16 +74,7 @@ const server = createServer((request, response) => {
     return;
   }
   try {
-    let content = readFileSync(join(root, "out", "renderer", target));
-    if (target === "index.html")
-      content = Buffer.from(
-        content
-          .toString()
-          .replace(
-            "<head>",
-            `<head><script>if (!localStorage.getItem('rao-projects-v2')) localStorage.setItem('rao-projects-v2', ${JSON.stringify(legacy)});</script>`,
-          ),
-      );
+    const content = readFileSync(join(root, "out", "renderer", target));
     response.setHeader(
       "Content-Type",
       target.endsWith(".js")
@@ -206,17 +203,6 @@ async function run(binary, dev, expectedNote, nextNote, screenshot = false) {
         await delay(100);
       }
       assert.equal((await evaluate("window.rao.projects.list()"))[handle].note, nextNote);
-    }
-    if (!dev) {
-      assert.equal(await evaluate("localStorage.getItem('rao-projects-v2')"), null);
-      assert.deepEqual(
-        await evaluate(`window.rao.projects.importLegacy(${JSON.stringify(legacy)})`),
-        { imported: 0, skipped: 1 },
-      );
-      assert.equal(
-        (await evaluate("window.rao.projects.list()"))[handle].note,
-        nextNote ?? expectedNote,
-      );
     }
     assert.ok(
       (await evaluate("window.rao.runtimes.list()")).length > 0,

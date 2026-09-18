@@ -1,4 +1,4 @@
-import type { ProjectDetails, ProjectImportResult } from "./projects";
+import type { ProjectDetails } from "./projects";
 /**
  * The IPC contract between renderer, preload and main. Everything that
  * crosses a process boundary is declared here, once, and typed from oar's
@@ -150,11 +150,8 @@ export interface AppVersions {
 
 /** Channel names: one place, so main and preload cannot drift. */
 export const IPC = {
-  projectsImportFile: "projects:importFile",
-  projectsExport: "projects:export",
   projectsList: "projects:list",
   projectsSave: "projects:save",
-  projectsImportLegacy: "projects:importLegacy",
   runtimesList: "runtimes:list",
   runtimesSkills: "runtimes:skills",
   runtimesMcpServers: "runtimes:mcpServers",
@@ -185,9 +182,6 @@ export interface RaoApi {
   readonly projects: {
     list(): Promise<Record<string, ProjectDetails>>;
     save(id: string, details: ProjectDetails): Promise<ProjectDetails>;
-    importLegacy(text: string): Promise<ProjectImportResult>;
-    importFile(): Promise<ProjectImportResult | null>;
-    export(legacy?: string): Promise<boolean>;
   };
   readonly runtimes: {
     list(): Promise<readonly RuntimeInfo[]>;

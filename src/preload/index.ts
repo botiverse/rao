@@ -13,11 +13,8 @@ function subscribe<T>(channel: IpcChannel, listener: (message: T) => void): () =
 
 const api: RaoApi = {
   projects: {
-    importFile: async () => ipcRenderer.invoke(IPC.projectsImportFile),
-    export: async (legacy) => ipcRenderer.invoke(IPC.projectsExport, legacy),
     list: async () => ipcRenderer.invoke(IPC.projectsList),
     save: async (id, details) => ipcRenderer.invoke(IPC.projectsSave, id, details),
-    importLegacy: async (text) => ipcRenderer.invoke(IPC.projectsImportLegacy, text),
   },
   runtimes: {
     list: async () => ipcRenderer.invoke(IPC.runtimesList),

@@ -1,4 +1,3 @@
-import { ProjectTransfer } from "./components/ProjectTransfer";
 import { ContextUsageIndicator } from "./components/ContextUsageIndicator";
 import { RuntimeLogo } from "./components/RuntimeLogo";
 import { useEffect, useState } from "react";
@@ -97,7 +96,6 @@ export function App() {
             >
               Retry loading projects
             </button>
-            <ProjectTransfer />
           </div>
         ) : !store.loaded || !projectsLoaded ? (
           <div
@@ -125,7 +123,6 @@ export function App() {
                   <Plus size={14} /> New project
                 </button>
               </div>
-              <ProjectTransfer />
               {projects.length > 0 ? (
                 <div className="divide-y divide-line">
                   {projects.map((item) => (

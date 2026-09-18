@@ -1,22 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
-import { dirname, join } from "node:path";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
-import {
-  legacyProjects,
-  parseProjectDetails,
-  projectId,
-  type ProjectDetails,
-  type ProjectImportResult,
-} from "@shared/projects";
+import { dirname } from "node:path";
+import { mkdirSync } from "node:fs";
+import { parseProjectDetails, projectId, type ProjectDetails } from "@shared/projects";
 
 /** Phase one: ID equals the Rao session handle; details remain a validated JSON document. */
 export class ProjectStore {
   readonly #db: DatabaseSync;
-  readonly #backups: string;
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
-    this.#backups = join(dirname(path), "project-import-backups");
     this.#db = new DatabaseSync(path);
     try {
       this.#db.exec(
@@ -26,16 +17,12 @@ export class ProjectStore {
       if (version !== 0 && version !== 1) throw new Error("Unsupported project database version");
       if (version === 0)
         this.#transaction(() => {
-          this.#db.exec(`CREATE TABLE IF NOT EXISTS projects (
-          id TEXT PRIMARY KEY, details TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
-        ); CREATE TABLE IF NOT EXISTS legacy_imports (source TEXT PRIMARY KEY, imported_at INTEGER NOT NULL);`);
-          this.#db.exec(`ALTER TABLE projects ADD COLUMN current_session TEXT;
-          ALTER TABLE projects ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
-          ALTER TABLE projects ADD COLUMN creating INTEGER NOT NULL DEFAULT 0;
-          ALTER TABLE projects ADD COLUMN cleanup_pending INTEGER NOT NULL DEFAULT 0;
-          UPDATE projects SET current_session = id, created_at = updated_at;
-          ALTER TABLE legacy_imports ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
-          PRAGMA user_version = 1;`);
+          this.#db.exec(`CREATE TABLE projects (
+            id TEXT PRIMARY KEY, details TEXT NOT NULL,
+            deleted INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL,
+            current_session TEXT, created_at INTEGER NOT NULL DEFAULT 0,
+            creating INTEGER NOT NULL DEFAULT 0, cleanup_pending INTEGER NOT NULL DEFAULT 0
+          ); PRAGMA user_version = 1;`);
         });
     } catch (error) {
       this.#db.close();
@@ -97,42 +84,6 @@ export class ProjectStore {
       .prepare("SELECT id, deleted FROM projects WHERE creating = 1 OR cleanup_pending = 1")
       .all()
       .map((row) => ({ id: String(row.id), deleting: row.deleted === 1 }));
-  }
-  importLegacy(source: string, text: string, sessions: ReadonlySet<string>): ProjectImportResult {
-    const details = legacyProjects(text);
-    const entries = Object.entries(details);
-    if (entries.length === 0) return { imported: 0, skipped: 0 };
-    const digest = createHash("sha256").update(text).digest("hex");
-    const key = `${source}:${digest}`;
-    if (this.#db.prepare("SELECT source FROM legacy_imports WHERE source = ?").get(key))
-      return { imported: 0, skipped: entries.length };
-    for (const [id] of entries) {
-      if (!sessions.has(id) && !this.#db.prepare("SELECT id FROM projects WHERE id = ?").get(id)) {
-        throw new Error(
-          `No saved conversation for project ${id}. Import into the same Rao data directory.`,
-        );
-      }
-    }
-    mkdirSync(this.#backups, { recursive: true, mode: 0o700 });
-    try {
-      writeFileSync(join(this.#backups, `${digest}.json`), text, { flag: "wx", mode: 0o600 });
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-    }
-    return this.#transaction(() => {
-      const insert = this.#db.prepare(
-        `INSERT OR IGNORE INTO projects (id, current_session, details, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-      );
-      let imported = 0;
-      for (const [id, value] of entries)
-        imported += Number(
-          insert.run(id, id, JSON.stringify(value), Date.now(), Date.now()).changes,
-        );
-      this.#db
-        .prepare("INSERT INTO legacy_imports (source, imported_at, version) VALUES (?, ?, 1)")
-        .run(key, Date.now());
-      return { imported, skipped: entries.length - imported };
-    });
   }
   #transaction<T>(run: () => T): T {
     this.#db.exec("BEGIN IMMEDIATE");

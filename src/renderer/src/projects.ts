@@ -30,8 +30,6 @@ export const useProjects = create<ProjectsStore>((set, get) => ({
     await ordered(async () => {
       set({ loading: true, error: null });
       try {
-        const legacy = localStorage.getItem("rao-projects-v2");
-        if (legacy !== null) await window.rao.projects.importLegacy(legacy);
         let revision: number;
         let details: Record<string, ProjectDetails>;
         do {

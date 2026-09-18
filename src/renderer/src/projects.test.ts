@@ -5,33 +5,29 @@ afterEach(() => {
   vi.resetModules();
   localStorage.clear();
 });
-it("imports current-origin legacy data before loading and exposes retryable startup failures", async () => {
-  const old = JSON.stringify({ state: { details: { a: { name: "A", note: "" } } }, version: 1 });
+it("loads SQLite projects without reading localStorage and retries failed loads", async () => {
+  const old = "invalid obsolete data";
   localStorage.setItem("rao-projects-v2", old);
-  const order: string[] = [];
-  const importLegacy = vi
+  const read = vi.spyOn(Storage.prototype, "getItem");
+  const list = vi
     .fn()
-    .mockRejectedValueOnce(new Error("backup failed"))
-    .mockImplementation(async () => {
-      order.push("import");
-    });
-  const list = vi.fn(async () => {
-    order.push("list");
-    return { a: { name: "A", note: "" } };
-  });
-  vi.stubGlobal("rao", { projects: { importLegacy, list } });
+    .mockRejectedValueOnce(new Error("read failed"))
+    .mockResolvedValue({ a: { name: "A", note: "" } });
+  vi.stubGlobal("rao", { projects: { list } });
   const { useProjects } = await import("./projects");
   await useProjects.getState().load();
   expect(useProjects.getState()).toMatchObject({
     loaded: false,
-    error: "backup failed",
+    error: "read failed",
     details: {},
   });
-  expect(list).not.toHaveBeenCalled();
   await useProjects.getState().load();
-  expect(order).toEqual(["import", "list"]);
-  expect(useProjects.getState().loaded).toBe(true);
-  expect(localStorage.getItem("rao-projects-v2")).toBe(old);
+  expect(useProjects.getState()).toMatchObject({
+    loaded: true,
+    details: { a: { name: "A", note: "" } },
+  });
+  expect(read).not.toHaveBeenCalled();
+  read.mockRestore();
 });
 it("serializes saves and later loads, merging patches only after persistence acknowledgement", async () => {
   const { promise: first, resolve: release } = Promise.withResolvers<{

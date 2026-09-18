@@ -19,8 +19,7 @@ Electron client for coding agents, driven through `@botiverse/oar`. Read
   `@botiverse/oar/observe` and `/brands` are also used by the renderer.
 - Project metadata lives in main-owned `src/main/projects/store.ts` (SQLite).
   The renderer is an in-memory cache; acknowledge saves only after IPC succeeds.
-  Keep legacy imports backed up, atomic, and unable to overwrite existing rows
-  or resurrect tombstones. Project lifecycle spans SQLite and JSONL through
+  Project lifecycle spans SQLite and JSONL through
   `ProjectService` with durable recovery intent.
 - Conversation persistence is `src/main/sessions/store.ts`: append-only JSONL
   of complete OAR records with stream-instance IDs, plus `index.json`.

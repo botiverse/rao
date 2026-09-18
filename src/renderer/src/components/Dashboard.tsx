@@ -1,4 +1,3 @@
-import { ProjectTransfer } from "./ProjectTransfer";
 import { RuntimeLogo } from "./RuntimeLogo";
 import { RuntimeInventory } from "./RuntimeInventory";
 import { useEffect, useState } from "react";
@@ -334,7 +333,6 @@ export function Dashboard() {
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-5">
       <div className="mx-auto max-w-5xl">
-        <ProjectTransfer />
         <div className="mb-4 flex items-center justify-between">
           <div>
             <h1 className="text-lg font-medium">Dashboard</h1>

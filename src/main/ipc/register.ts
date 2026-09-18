@@ -1,7 +1,6 @@
 import type { ProjectStore } from "../projects/store";
 import { ProjectService } from "../projects/service";
-import { readFileSync, writeFileSync } from "node:fs";
-import { legacyProjects, projectId, parseProjectDetails } from "@shared/projects";
+import { projectId, parseProjectDetails } from "@shared/projects";
 /**
  * Typed ipcMain handlers. Each handler validates the sender and its
  * arguments before touching the AgentHost; the renderer is our own code,
@@ -33,52 +32,11 @@ export function registerIpc(
   };
 
   const service = new ProjectService(host, projects);
-  const importProjects = (source: string, text: string) =>
-    projects.importLegacy(source, text, new Set(host.list().map((item) => item.handle)));
   on(IPC.projectsList, () => projects.list());
   on(IPC.projectsSave, (_event, id, details) => {
     const handle = projectId(id);
     if (!host.list().some((item) => item.handle === handle)) throw new Error("Unknown project");
     return projects.save(handle, parseProjectDetails(details));
-  });
-  on(IPC.projectsImportLegacy, (event, text) => {
-    const url = new URL(event.senderFrame?.url ?? "");
-    return importProjects(
-      url.protocol === "file:" ? "file://" : url.origin,
-      expectString(text, "legacy data"),
-    );
-  });
-  on(IPC.projectsImportFile, async () => {
-    const options: OpenDialogOptions = {
-      properties: ["openFile"],
-      filters: [{ name: "Rao projects", extensions: ["json"] }],
-    };
-    const window = getWindow();
-    const picked = window
-      ? await dialog.showOpenDialog(window, options)
-      : await dialog.showOpenDialog(options);
-    const path = picked.filePaths[0];
-    return picked.canceled || !path
-      ? null
-      : importProjects("file-import", readFileSync(path, "utf8"));
-  });
-  on(IPC.projectsExport, async (_event, legacy) => {
-    const text =
-      legacy === undefined
-        ? JSON.stringify({ state: { details: projects.list() }, version: 1 }, null, 2)
-        : expectString(legacy, "legacy data");
-    legacyProjects(text);
-    const options = {
-      defaultPath: "Rao projects.json",
-      filters: [{ name: "Rao projects", extensions: ["json"] }],
-    };
-    const window = getWindow();
-    const picked = window
-      ? await dialog.showSaveDialog(window, options)
-      : await dialog.showSaveDialog(options);
-    if (picked.canceled || !picked.filePath) return false;
-    writeFileSync(picked.filePath, text, { mode: 0o600 });
-    return true;
   });
   on(IPC.runtimesList, async () => host.listRuntimes());
   on(IPC.runtimesListModels, async (_event, runtime) => {

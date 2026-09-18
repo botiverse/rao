@@ -90,17 +90,10 @@ pending operations recover on restart. Deletion records its intent before
 removing the JSONL session, then retains a tombstone. It is not a transaction
 across SQLite and JSONL; a failed cleanup stays pending and retries at startup.
 
-At startup, the current origin's `rao-projects-v2` envelope is validated in full,
-backed up under `project-import-backups/`, and imported in one SQLite transaction.
-Legacy goal/context become note. Existing rows and tombstones win over imports.
-Completion is keyed by origin plus content digest, not a global migrated flag;
-an empty origin marks nothing complete. Neither localStorage nor existing JSONL
-is removed. The Projects home and Dashboard expose one-time **Export projects…**
-and **Import projects…** for transfer from another origin. These JSON files
-contain project details, not conversation logs, and must be imported with the
-matching Rao session data directory. Open the updated development app once to
-export old-origin data, then import from the installed app; no repeated switching
-is needed. Invalid imports remain retryable and cannot overwrite newer notes.
+Project metadata is read exclusively from SQLite. The one-time localStorage
+migration and its import/export UI have been removed after migration completion.
+Existing SQLite databases remain readable; historical localStorage and backup
+files are not accessed or modified.
 
 `SessionStore` writes every `RawEvent` the
 live subscription delivered to `<userData>/sessions/<handle>.events.jsonl`
@@ -195,7 +188,7 @@ semantic effect. Success acknowledgements are stored without a permanent badge.
 Unlinked native messages remain available in records; Rao does not match them
 by text or display them as duplicate bubbles. Cancellation remains deferred.
 
-## Packaging and migration verification
+## Packaging and persistence verification
 
 `pnpm package` / `pnpm package:mac` stage the production dependency graph in
 `dist/package` using actual pnpm resolutions, including peers and nested versions.
@@ -212,8 +205,8 @@ pnpm test:app "release/0.1.0/mac-arm64/Rao.app/Contents/MacOS/Rao"
 
 On macOS the smoke test first copies the entire app outside the repository, preventing
 missing imports from falling back to development `node_modules`. It creates an isolated
-data directory, imports legacy metadata from
-an HTTP origin, opens the real packaged window at a file origin, edits a note,
+data directory with an existing SQLite project, opens development at an HTTP origin
+and the real packaged window at a file origin, edits a note,
 restarts both builds, checks singleton rejection, and verifies unchanged JSONL.
 It exercises Electron's built-in SQLite and packaged OAR dependencies. It never
 restarts or replaces the user's installed application.
