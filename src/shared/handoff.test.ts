@@ -37,13 +37,12 @@ const request: RawEvent = {
   receivedAt: 8,
   body: { kind: "prompt", input: marker.markdown, inputId: "handoff-input" },
 };
-it("exports Unicode conversation in order, preserves tool arguments and removes results and reasoning", () => {
+it("exports Unicode user/assistant text in order and omits tool calls, results and reasoning", () => {
   const result = handoffMarkdown(history, "保存的 note");
   expect(result).toContain("保存的 note");
   expect(result).toContain("用户目标");
-  expect(result).toContain("src/app.ts");
-  expect(result.indexOf("Before tool")).toBeLessThan(result.indexOf("src/app.ts"));
-  expect(result.indexOf("src/app.ts")).toBeLessThan(result.indexOf("After tool"));
+  expect(result.indexOf("Before tool")).toBeLessThan(result.indexOf("After tool"));
+  expect(result).not.toContain("src/app.ts");
   expect(result).not.toContain("SECRET_TOOL_RESULT");
   expect(result).not.toContain("PRIVATE_REASONING");
 });

@@ -221,7 +221,7 @@ IDs stay in the record envelopes and handoff markers.
 
 The main process reads the saved project note and folds the complete project log
 using the same shared transcript projection as the UI. It exports user/assistant
-messages and tool calls as Markdown, omitting tool results and reasoning.
+messages as Markdown, omitting tool calls, tool results and reasoning.
 Previous handoff prompts are excluded by request/session identity, and previous
 markers contribute only their runtime transition, so repeated handoffs do not
 nest or duplicate historical payloads. A 512 KB UTF-8 transport guard rejects an
