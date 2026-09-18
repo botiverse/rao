@@ -13,16 +13,19 @@ function Collapsible({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="my-1">
+    <div className="my-1 min-w-0 max-w-full">
       <button
         type="button"
         onClick={() => {
           setOpen((value) => !value);
         }}
-        className={`flex items-center gap-1 text-xs ${tone} hover:text-fg`}
+        className={`flex w-full min-w-0 items-center gap-1 text-left text-xs ${tone} hover:text-fg`}
       >
-        <ChevronRight size={12} className={`transition-transform ${open ? "rotate-90" : ""}`} />
-        <span className="truncate font-mono">{summary}</span>
+        <ChevronRight
+          size={12}
+          className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
+        />
+        <span className="min-w-0 truncate font-mono">{summary}</span>
       </button>
       {open ? <div className="mt-1 ml-4">{children}</div> : null}
     </div>
@@ -31,7 +34,7 @@ function Collapsible({
 
 function Pre({ text }: { text: string }) {
   return (
-    <pre className="selectable max-h-72 overflow-auto rounded-md border border-line bg-bg-sunken p-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-muted">
+    <pre className="selectable max-h-72 overflow-y-auto overflow-x-hidden rounded-md border border-line bg-bg-sunken p-2 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-muted">
       {text}
     </pre>
   );
@@ -47,14 +50,35 @@ function AgentTag({ path }: { path: readonly string[] }) {
 
 function Item({ item }: { item: TranscriptItem }) {
   switch (item.kind) {
-    case "user":
+    case "user": {
+      const state = item.delivery?.state ?? item.submission?.state;
+      const label =
+        state === "pending"
+          ? "Unconfirmed"
+          : state === "sending"
+            ? "Sending…"
+            : state === "rejected"
+              ? "Rejected"
+              : state === "unknown"
+                ? "Unconfirmed"
+                : null;
+      const reason = item.delivery?.attempts.at(-1)?.reason ?? item.submission?.reason;
       return (
         <div className="my-4 flex justify-end">
           <div className="selectable max-w-[75%] rounded-2xl rounded-br-md bg-accent-soft px-3.5 py-2 whitespace-pre-wrap text-fg">
             {item.text}
+            {label ? (
+              <div
+                className={`mt-1 text-[10px] ${state === "rejected" || state === "unknown" ? "text-danger" : "text-fg-faint"}`}
+                title={reason}
+              >
+                {label}
+              </div>
+            ) : null}
           </div>
         </div>
       );
+    }
     case "assistant":
       return (
         <div className="selectable my-2 max-w-[85%] whitespace-pre-wrap leading-relaxed">
@@ -123,7 +147,7 @@ export function Transcript({ items }: { items: readonly TranscriptItem[] }) {
   // Runs after every render: the transcript re-renders exactly when items change.
   useEffect(() => {
     if (pinned.current) {
-      bottom.current?.scrollIntoView({ block: "end" });
+      bottom.current?.scrollIntoView({ block: "end", inline: "nearest" });
     }
   });
 
@@ -136,16 +160,12 @@ export function Transcript({ items }: { items: readonly TranscriptItem[] }) {
           pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
         }
       }}
-      className="flex-1 overflow-y-auto px-8 py-4"
+      className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-8 py-4"
     >
       <div className="mx-auto max-w-3xl">
-        {items.length === 0 ? (
-          <p className="mt-24 text-center text-sm text-fg-faint">
-            Session open. Say something to the agent.
-          </p>
-        ) : (
-          items.map((item) => <Item key={item.id} item={item} />)
-        )}
+        {items.map((item) => (
+          <Item key={item.id} item={item} />
+        ))}
         <div ref={bottom} />
       </div>
     </div>

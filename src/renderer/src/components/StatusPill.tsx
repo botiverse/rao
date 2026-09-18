@@ -20,9 +20,12 @@ export function phaseLabel(state: AgentState, status: AgentStatus): string {
   }
   const { phase } = status;
   if (typeof phase === "string") {
-    return { waiting_model: "waiting for model", thinking: "thinking", responding: "responding" }[
-      phase
-    ];
+    return {
+      waiting_model: "waiting for model",
+      thinking: "thinking",
+      responding: "responding",
+      compacting: "compacting context",
+    }[phase];
   }
   return `running ${phase.tool}`;
 }

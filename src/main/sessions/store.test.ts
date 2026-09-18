@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Event, EventBody } from "@botiverse/oar";
@@ -96,4 +96,45 @@ describe("SessionStore", () => {
     expect(reopened.readEvents("a")).toHaveLength(1);
     reopened.dispose();
   });
+});
+
+it("persists native rebinding and prompt-attempt guards across restarts", () => {
+  const store = new SessionStore(dir);
+  store.create(record("empty", 1));
+  store.create(record("started", 1));
+  store.append("started", event({ kind: "text_delta", text: "existing history" }, 0, 2));
+  expect(store.isUnstarted("started")).toBe(false);
+  expect(() => store.bindUnstarted("started", "replacement")).toThrow();
+  store.bindUnstarted("empty", "new-native");
+  store.markPromptAttempted("empty");
+  store.dispose();
+  const reopened = new SessionStore(dir);
+  try {
+    expect(reopened.get("empty")?.sessionId).toBe("new-native");
+    expect(reopened.isUnstarted("empty")).toBe(false);
+    expect(() => reopened.bindUnstarted("empty", "replacement")).toThrow();
+    expect(reopened.readEvents("started")).toHaveLength(1);
+  } finally {
+    reopened.dispose();
+  }
+});
+
+it("keeps session deletion retryable when log removal fails", () => {
+  const store = new SessionStore(dir);
+  store.create(record("busy", 1));
+  store.close("busy");
+  const path = join(dir, "busy.events.jsonl");
+  rmSync(path);
+  mkdirSync(path);
+  expect(() => store.remove("busy")).toThrow();
+  expect(store.get("busy")?.handle).toBe("busy");
+  rmSync(path, { recursive: true });
+  store.remove("busy");
+  expect(store.list()).toEqual([]);
+  store.dispose();
+});
+it("does not replace a corrupt session index with an empty list", () => {
+  writeFileSync(join(dir, "index.json"), "{broken");
+  expect(() => new SessionStore(dir)).toThrow("Invalid session index");
+  expect(readFileSync(join(dir, "index.json"), "utf8")).toBe("{broken");
 });

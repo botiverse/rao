@@ -1,8 +1,10 @@
 import { join } from "node:path";
 import { BrowserWindow, shell } from "electron";
+import { appIconPath } from "./app-icon";
 
 export function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
+    icon: appIconPath(),
     width: 1280,
     height: 820,
     minWidth: 900,

@@ -1,8 +1,8 @@
 /**
- * SessionStore: rao's own persistence. One append-only JSONL of oar `Event`s
- * per session plus an index.json of metadata. Events are the flat consumer
- * face, so a stored log replays into exactly the transcript the live
- * subscription produced; nothing here interprets them.
+ * SessionStore: rao's own persistence. One append-only JSONL per session
+ * plus an index.json of metadata. New entries retain complete OAR
+ * records and a stream-instance ID. Legacy flat events remain readable.
+ * The renderer uses the same conversation reducer live and on replay.
  *
  * Event lines go through synchronous fd writes so their order, and
  * everything written so far, survives a crashing process. The index is
@@ -20,12 +20,12 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { Event } from "@botiverse/oar";
-import { isRuntimeId, type SessionRecord } from "@shared/ipc";
+import { eventsOf } from "@botiverse/oar/observe";
+import { isRuntimeId, type SessionRecord, type SessionEvent } from "@shared/ipc";
 
 const INDEX_FILE = "index.json";
 /** First line of every events file; bump when the stored Event vocabulary changes incompatibly. */
-export const EVENTS_FORMAT = "rao-events/1";
+export const EVENTS_FORMAT = "rao-events/2";
 const FLUSH_DELAY_MS = 500;
 const TITLE_MAX = 80;
 
@@ -65,7 +65,7 @@ export class SessionStore {
   }
 
   /** Append one event; updates `updatedAt`, and `title` / `model` when the event carries them. */
-  append(handle: string, event: Event): void {
+  append(handle: string, event: SessionEvent): void {
     const record = this.#require(handle);
     let fd = this.#fds.get(handle);
     if (fd === undefined) {
@@ -74,15 +74,46 @@ export class SessionStore {
     }
     writeSync(fd, `${JSON.stringify(event)}\n`);
 
-    let next: SessionRecord = { ...record, updatedAt: event.receivedAt };
-    if (event.kind === "turn_started" && record.title === null) {
-      next = { ...next, title: titleOf(event.input) };
-    }
-    if (event.kind === "model") {
-      next = { ...next, model: event.model };
+    const next: SessionRecord = { ...record, updatedAt: event.receivedAt };
+    for (const fact of event.kind === "record" ? eventsOf(event.record) : [event]) {
+      if (fact.kind === "turn_started" && next.title === null)
+        Object.assign(next, { title: titleOf(fact.input) });
+      if (fact.kind === "model") Object.assign(next, { model: fact.model });
     }
     this.#records.set(handle, next);
     this.#scheduleFlush();
+  }
+
+  /** Only startup metadata may exist; conversation history must never be replaced. */
+  isUnstarted(handle: string): boolean {
+    const record = this.#require(handle);
+    return (
+      record.title === null &&
+      record.promptAttempted !== true &&
+      this.readEvents(handle).every((event) => {
+        if (event.kind !== "record") return event.kind === "model" || event.kind === "exited";
+        const raw = event.record;
+        if (raw.kind === "request") return raw.body.kind === "dispose";
+        return raw.kind === "response" || raw.body.events.every((fact) => fact.kind === "model");
+      })
+    );
+  }
+
+  markPromptAttempted(handle: string): void {
+    const record = this.#require(handle);
+    if (record.promptAttempted === true) return;
+    this.#records.set(handle, { ...record, promptAttempted: true });
+    this.#flushNow();
+  }
+
+  /** Keep the project handle and startup log; update its current native binding. */
+  bindUnstarted(handle: string, sessionId: string): SessionRecord {
+    if (!this.isUnstarted(handle))
+      throw new Error("Cannot replace a session after conversation has started");
+    const record = { ...this.#require(handle), sessionId };
+    this.#records.set(handle, record);
+    this.#flushNow();
+    return record;
   }
 
   /** Release the event file handle; the record stays. */
@@ -95,7 +126,7 @@ export class SessionStore {
     this.#flushNow();
   }
 
-  readEvents(handle: string): readonly Event[] {
+  readEvents(handle: string): readonly SessionEvent[] {
     this.#require(handle);
     const path = this.#eventsPath(handle);
     if (!existsSync(path)) {
@@ -103,7 +134,7 @@ export class SessionStore {
     }
     // The header line and any line that is not a well-formed Event (a corrupt
     // tail after a crash, a kind from a newer format) are skipped, never fatal.
-    const events: Event[] = [];
+    const events: SessionEvent[] = [];
     for (const line of readFileSync(path, "utf8").split("\n")) {
       if (line === "") {
         continue;
@@ -118,8 +149,8 @@ export class SessionStore {
 
   remove(handle: string): void {
     this.close(handle);
-    this.#records.delete(handle);
     rmSync(this.#eventsPath(handle), { force: true });
+    this.#records.delete(handle);
     this.#flushNow();
   }
 
@@ -150,14 +181,10 @@ export class SessionStore {
       return;
     }
     const parsed = parseJson(readFileSync(path, "utf8"));
-    if (!Array.isArray(parsed)) {
-      return;
+    if (!Array.isArray(parsed) || !parsed.every(isSessionRecord)) {
+      throw new Error("Invalid session index; restore its backup before opening Rao");
     }
-    for (const entry of parsed) {
-      if (isSessionRecord(entry)) {
-        this.#records.set(entry.handle, entry);
-      }
-    }
+    for (const entry of parsed) this.#records.set(entry.handle, entry);
   }
 
   #scheduleFlush(): void {
@@ -199,7 +226,33 @@ function isRecordObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isEvent(value: unknown): value is Event {
+function isEvent(value: unknown): value is SessionEvent {
+  if (isRecordObject(value) && value["kind"] === "record") {
+    const raw = value["record"];
+    return (
+      typeof value["streamId"] === "string" &&
+      typeof value["receivedAt"] === "number" &&
+      isRecordObject(raw) &&
+      typeof raw["sessionId"] === "string" &&
+      Array.isArray(raw["agentPath"]) &&
+      typeof raw["seq"] === "number" &&
+      typeof raw["receivedAt"] === "number" &&
+      isRecordObject(raw["body"]) &&
+      (raw["kind"] === "frame"
+        ? Array.isArray(raw["body"]["events"])
+        : raw["kind"] === "request"
+          ? typeof raw["id"] === "string"
+          : raw["kind"] === "response" && typeof raw["requestId"] === "string")
+    );
+  }
+  if (isRecordObject(value) && value["kind"] === "input_submission") {
+    return (
+      typeof value["id"] === "string" &&
+      typeof value["input"] === "string" &&
+      typeof value["receivedAt"] === "number" &&
+      ["sending", "steered", "queued", "rejected", "unknown"].includes(String(value["state"]))
+    );
+  }
   return (
     isRecordObject(value) &&
     typeof value["kind"] === "string" &&

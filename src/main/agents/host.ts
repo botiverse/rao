@@ -1,7 +1,8 @@
+import { homedir } from "node:os";
 /**
  * AgentHost: the one place in main that talks to oar. It probes runtimes,
  * opens and resumes sessions, forwards the record stream to the renderer as
- * flat events, and appends the same events to the SessionStore. It knows
+ * complete records, and appends the same records to the SessionStore. It knows
  * nothing about Electron windows: it pushes to a `Sink`.
  *
  * Kept as a plain class so it can later move into a `utilityProcess`
@@ -11,15 +12,20 @@ import {
   observeAgent,
   runtimes,
   simpleStateOf,
+  type AccountUsageSnapshot,
+  type InventoryResult,
+  type SkillEntry,
+  type McpServerEntry,
+  type ToolEntry,
   type AgentObserver,
   type ControlResult,
-  type Event,
   type ListModelsResult,
   type Runtime,
   type Session,
 } from "@botiverse/oar";
 import type {
   ControlOutcome,
+  SessionEvent,
   OpenSessionRequest,
   RuntimeId,
   RuntimeInfo,
@@ -28,8 +34,9 @@ import type {
   SessionRecord,
   SessionStatusMessage,
   SessionSummary,
+  SessionDiagnostics,
 } from "@shared/ipc";
-import { RUNTIME_IDS, RUNTIME_LABELS } from "@shared/ipc";
+import { RUNTIME_IDS } from "@shared/ipc";
 import type { SessionStore } from "../sessions/store";
 
 export interface Sink {
@@ -69,7 +76,7 @@ export class AgentHost {
               }));
         return {
           id,
-          label: RUNTIME_LABELS[id],
+          label: runtime.brand.name,
           installation,
           features: {
             listModels: runtime.listModels !== undefined,
@@ -89,7 +96,54 @@ export class AgentHost {
     return runtime.listModels(installation, { timeoutMs: 15_000 });
   }
 
-  async open(request: OpenSessionRequest): Promise<SessionSummary> {
+  async accountUsage(id: RuntimeId): Promise<AccountUsageSnapshot> {
+    const runtime = runtimes.require(id);
+    if (!runtime.accountUsage) return { kind: "unsupported", reason: "capability_unavailable" };
+    const installation = await requireAvailable(runtime);
+    return runtime.accountUsage(installation, { timeoutMs: 15_000 });
+  }
+
+  async skills(id: RuntimeId, cwd?: string): Promise<InventoryResult<SkillEntry>> {
+    const runtime = runtimes.require(id);
+    return runtime.skills(await requireAvailable(runtime), {
+      cwd: cwd ?? homedir(),
+      timeoutMs: 15_000,
+    });
+  }
+
+  async mcpServers(id: RuntimeId, cwd?: string): Promise<InventoryResult<McpServerEntry>> {
+    const runtime = runtimes.require(id);
+    return runtime.mcpServers(await requireAvailable(runtime), {
+      cwd: cwd ?? homedir(),
+      timeoutMs: 15_000,
+    });
+  }
+
+  async tools(id: RuntimeId, cwd?: string): Promise<InventoryResult<ToolEntry>> {
+    const runtime = runtimes.require(id);
+    return runtime.tools(await requireAvailable(runtime), {
+      cwd: cwd ?? homedir(),
+      timeoutMs: 15_000,
+    });
+  }
+
+  diagnostics(): readonly SessionDiagnostics[] {
+    return [...this.#live].map(([handle, { session }]) => {
+      const records = session.records();
+      return {
+        handle,
+        model: session.model().value,
+        capabilities: session.capabilities,
+        usage: session.usage().value,
+        context: session.contextUsage().value,
+        graph: session.graph(),
+        recordCount: records.length,
+        recentRecords: records.slice(-100),
+      };
+    });
+  }
+
+  async open(request: OpenSessionRequest, handle = crypto.randomUUID()): Promise<SessionSummary> {
     const runtime = runtimes.require(request.runtime);
     const installation = await requireAvailable(runtime);
     const session = await runtime.session(installation, {
@@ -98,7 +152,7 @@ export class AgentHost {
     });
     const now = Date.now();
     const record: SessionRecord = {
-      handle: crypto.randomUUID(),
+      handle,
       runtime: request.runtime,
       sessionId: session.id,
       cwd: request.cwd,
@@ -107,8 +161,13 @@ export class AgentHost {
       openedAt: now,
       updatedAt: now,
     };
-    this.#store.create(record);
-    this.#attach(record.handle, session);
+    try {
+      this.#store.create(record);
+      this.#attach(record.handle, session);
+    } catch (error) {
+      await session.dispose();
+      throw error;
+    }
     return this.#summary(record);
   }
 
@@ -120,29 +179,45 @@ export class AgentHost {
     }
     const runtime = runtimes.require(record.runtime);
     const installation = await requireAvailable(runtime);
+    // Pi does not persist unused native sessions. The project handle remains
+    // stable while an unstarted project's transient native binding is renewed.
+    const unstartedPi = record.runtime === "pi" && this.#store.isUnstarted(handle);
     const session = await runtime.session(installation, {
       cwd: record.cwd,
-      resume: record.sessionId,
+      ...(unstartedPi ? {} : { resume: record.sessionId }),
       ...(record.model === undefined ? {} : { model: record.model }),
     });
+    let current = record;
+    if (unstartedPi) {
+      try {
+        current = this.#store.bindUnstarted(handle, session.id);
+      } catch (error) {
+        await session.dispose();
+        throw error;
+      }
+    }
     this.#attach(handle, session);
-    return this.#summary(record);
+    return this.#summary(current);
   }
 
   list(): readonly SessionSummary[] {
     return this.#store.list().map((record) => this.#summary(record));
   }
 
-  events(handle: string): readonly Event[] {
+  events(handle: string): readonly SessionEvent[] {
     return this.#store.readEvents(handle);
   }
 
   async prompt(handle: string, input: string): Promise<ControlOutcome> {
-    return toOutcome(await this.#requireLive(handle).session.prompt(input));
+    const { session } = this.#requireLive(handle);
+    this.#store.markPromptAttempted(handle);
+    return toOutcome(await session.prompt(input));
   }
 
   async steerOrQueue(handle: string, input: string): Promise<ControlOutcome> {
-    const landed = await this.#requireLive(handle).session.steerOrQueue(input);
+    const { session } = this.#requireLive(handle);
+    this.#store.markPromptAttempted(handle);
+    const landed = await session.steerOrQueue(input);
     return landed.landed === "rejected"
       ? { accepted: false, reason: landed.reason }
       : toOutcome(landed.result);
@@ -158,9 +233,12 @@ export class AgentHost {
     if (live === undefined) {
       return;
     }
-    this.#release(handle, live);
-    await live.session.dispose();
-    this.#sink.closed({ handle, reason: "disposed" });
+    try {
+      await live.session.dispose();
+    } finally {
+      if (this.#live.get(handle) === live) this.#release(handle, live);
+      this.#sink.closed({ handle, reason: "disposed" });
+    }
   }
 
   /** Release the runtime if live and remove the stored session. */
@@ -176,19 +254,23 @@ export class AgentHost {
   }
 
   #attach(handle: string, session: Session): void {
-    // Flat events for the transcript and the store; the native frames stay
-    // reachable in session.records() should a debug view want them later.
-    const unsubscribe = session.events((event) => {
-      this.#store.append(handle, event);
-      this.#sink.event({ handle, event });
-      if (event.kind === "exited") {
-        const live = this.#live.get(handle);
-        if (live !== undefined) {
-          this.#release(handle, live);
+    const streamId = crypto.randomUUID();
+    let exited = false;
+    const unsubscribe = session.rawEvents(
+      (record) => {
+        this.#publish(handle, { kind: "record", streamId, receivedAt: record.receivedAt, record });
+        if (record.kind === "response" && record.body.kind === "exited") {
+          exited = true;
+          const live = this.#live.get(handle);
+          if (live !== undefined) this.#release(handle, live);
+          this.#sink.closed({
+            handle,
+            reason: `runtime exited (code ${String(record.body.code)})`,
+          });
         }
-        this.#sink.closed({ handle, reason: `runtime exited (code ${String(event.code)})` });
-      }
-    });
+      },
+      { sessionId: session.id, afterSeq: -1 },
+    );
 
     // Status is a fold over the same records plus a clock; observeAgent
     // pushes on every record and on the silence edge.
@@ -199,10 +281,22 @@ export class AgentHost {
         state: simpleStateOf(view),
         status: view.status,
         model: session.model().value,
+        context: session.contextUsage().value,
       });
     });
 
+    if (exited) {
+      observer.dispose();
+      unsubscribe();
+      this.#store.close(handle);
+      return;
+    }
     this.#live.set(handle, { session, observer, unsubscribe });
+  }
+
+  #publish(handle: string, event: SessionEvent): void {
+    this.#store.append(handle, event);
+    this.#sink.event({ handle, event });
   }
 
   #release(handle: string, live: Live): void {
@@ -218,6 +312,7 @@ export class AgentHost {
       ...record,
       live: live !== undefined,
       capabilities: live?.session.capabilities ?? null,
+      context: live?.session.contextUsage().value ?? null,
     };
   }
 

@@ -1,3 +1,4 @@
+import type { ProjectDetails, ProjectImportResult } from "./projects";
 /**
  * The IPC contract between renderer, preload and main. Everything that
  * crosses a process boundary is declared here, once, and typed from oar's
@@ -7,8 +8,18 @@
  * `electron` and Node imports: type-only imports from oar are erased.
  */
 import type {
+  AccountUsageSnapshot,
+  InventoryResult,
+  SkillEntry,
+  McpServerEntry,
+  ToolEntry,
+  ContextUsage,
+  SessionUsage,
+  SessionGraph,
+  RawEvent,
   AgentStatus,
   Event,
+  ControlResult,
   InstallationSnapshot,
   ListModelsResult,
   SessionCapabilities,
@@ -17,14 +28,6 @@ import type {
 export type RuntimeId = "claude" | "codex" | "kimi" | "pi" | "grok";
 
 export const RUNTIME_IDS: readonly RuntimeId[] = ["claude", "codex", "kimi", "pi", "grok"];
-
-export const RUNTIME_LABELS: Readonly<Record<RuntimeId, string>> = {
-  claude: "Claude Code",
-  codex: "Codex",
-  kimi: "Kimi Code",
-  pi: "Pi",
-  grok: "Grok Build",
-};
 
 export function isRuntimeId(value: unknown): value is RuntimeId {
   return typeof value === "string" && (RUNTIME_IDS as readonly string[]).includes(value);
@@ -41,6 +44,7 @@ export interface RuntimeInfo {
 }
 
 export interface OpenSessionRequest {
+  readonly project?: ProjectDetails;
   readonly runtime: RuntimeId;
   readonly cwd: string;
   readonly model?: string;
@@ -56,6 +60,8 @@ export interface SessionRecord {
   readonly handle: string;
   readonly runtime: RuntimeId;
   readonly sessionId: string;
+  /** Persisted before forwarding any prompt, including failed/interrupted attempts. */
+  readonly promptAttempted?: boolean;
   readonly cwd: string;
   /** Model the runtime reported (latest `model` event), when any. */
   readonly model?: string;
@@ -67,6 +73,8 @@ export interface SessionRecord {
 
 /** A session as the renderer sees it: the stored record plus live state. */
 export interface SessionSummary extends SessionRecord {
+  /** Current live context; absent/null until the runtime reports it. */
+  readonly context?: ContextUsage | null;
   /** Whether a runtime process is currently attached to this session. */
   readonly live: boolean;
   /** Present only while live. */
@@ -80,12 +88,35 @@ export type ControlOutcome =
 
 export type AgentState = "idle" | "busy" | "stuck" | "error";
 
+/** Legacy Rao submission log; retained only for reading existing conversations. */
+export interface InputSubmission {
+  readonly kind: "input_submission";
+  readonly id: string;
+  readonly input: string;
+  readonly receivedAt: number;
+  readonly state: "sending" | "steered" | "queued" | "rejected" | "unknown";
+  readonly reason?: string;
+  readonly result?: ControlResult;
+}
+
+/** One native stream instance; seq restarts when a runtime is resumed. */
+export interface SessionStreamRecord {
+  readonly kind: "record";
+  readonly streamId: string;
+  readonly receivedAt: number;
+  readonly record: RawEvent;
+}
+
+/** Flat events/submissions are read-only legacy history. New writes contain records. */
+export type SessionEvent = Event | InputSubmission | SessionStreamRecord;
+
 export interface SessionEventMessage {
   readonly handle: string;
-  readonly event: Event;
+  readonly event: SessionEvent;
 }
 
 export interface SessionStatusMessage {
+  readonly context: ContextUsage | null;
   readonly handle: string;
   readonly state: AgentState;
   readonly status: AgentStatus;
@@ -95,6 +126,18 @@ export interface SessionStatusMessage {
 export interface SessionClosedMessage {
   readonly handle: string;
   readonly reason: string;
+}
+
+export interface SessionDiagnostics {
+  readonly handle: string;
+  readonly model: string | null;
+  readonly capabilities: SessionCapabilities;
+  readonly usage: SessionUsage;
+  readonly context: ContextUsage | null;
+  readonly graph: SessionGraph;
+  readonly recordCount: number;
+  /** Most recent 100 records from the current process, not persisted history. */
+  readonly recentRecords: readonly RawEvent[];
 }
 
 export interface AppVersions {
@@ -107,7 +150,17 @@ export interface AppVersions {
 
 /** Channel names: one place, so main and preload cannot drift. */
 export const IPC = {
+  projectsImportFile: "projects:importFile",
+  projectsExport: "projects:export",
+  projectsList: "projects:list",
+  projectsSave: "projects:save",
+  projectsImportLegacy: "projects:importLegacy",
   runtimesList: "runtimes:list",
+  runtimesSkills: "runtimes:skills",
+  runtimesMcpServers: "runtimes:mcpServers",
+  runtimesTools: "runtimes:tools",
+  runtimesAccountUsage: "runtimes:accountUsage",
+  sessionDiagnostics: "session:diagnostics",
   runtimesListModels: "runtimes:listModels",
   sessionOpen: "session:open",
   sessionResume: "session:resume",
@@ -129,18 +182,30 @@ export type IpcChannel = (typeof IPC)[keyof typeof IPC];
 
 /** The API preload exposes on `window.rao`. */
 export interface RaoApi {
+  readonly projects: {
+    list(): Promise<Record<string, ProjectDetails>>;
+    save(id: string, details: ProjectDetails): Promise<ProjectDetails>;
+    importLegacy(text: string): Promise<ProjectImportResult>;
+    importFile(): Promise<ProjectImportResult | null>;
+    export(legacy?: string): Promise<boolean>;
+  };
   readonly runtimes: {
     list(): Promise<readonly RuntimeInfo[]>;
+    skills(runtime: RuntimeId, cwd?: string): Promise<InventoryResult<SkillEntry>>;
+    mcpServers(runtime: RuntimeId, cwd?: string): Promise<InventoryResult<McpServerEntry>>;
+    tools(runtime: RuntimeId, cwd?: string): Promise<InventoryResult<ToolEntry>>;
     listModels(runtime: RuntimeId): Promise<ListModelsResult>;
+    accountUsage(runtime: RuntimeId): Promise<AccountUsageSnapshot>;
   };
   readonly sessions: {
+    diagnostics(): Promise<readonly SessionDiagnostics[]>;
     open(request: OpenSessionRequest): Promise<SessionSummary>;
     /** Reattach a runtime to a stored session via its native resume. */
     resume(handle: string): Promise<SessionSummary>;
     /** Every stored session, most recently updated first, with live state. */
     list(): Promise<readonly SessionSummary[]>;
     /** The persisted event log of one session, for replaying the transcript. */
-    events(handle: string): Promise<readonly Event[]>;
+    events(handle: string): Promise<readonly SessionEvent[]>;
     prompt(handle: string, input: string): Promise<ControlOutcome>;
     steerOrQueue(handle: string, input: string): Promise<ControlOutcome>;
     abort(handle: string): Promise<ControlOutcome>;

@@ -12,11 +12,23 @@ function subscribe<T>(channel: IpcChannel, listener: (message: T) => void): () =
 }
 
 const api: RaoApi = {
+  projects: {
+    importFile: async () => ipcRenderer.invoke(IPC.projectsImportFile),
+    export: async (legacy) => ipcRenderer.invoke(IPC.projectsExport, legacy),
+    list: async () => ipcRenderer.invoke(IPC.projectsList),
+    save: async (id, details) => ipcRenderer.invoke(IPC.projectsSave, id, details),
+    importLegacy: async (text) => ipcRenderer.invoke(IPC.projectsImportLegacy, text),
+  },
   runtimes: {
     list: async () => ipcRenderer.invoke(IPC.runtimesList),
+    skills: async (runtime, cwd) => ipcRenderer.invoke(IPC.runtimesSkills, runtime, cwd),
+    mcpServers: async (runtime, cwd) => ipcRenderer.invoke(IPC.runtimesMcpServers, runtime, cwd),
+    tools: async (runtime, cwd) => ipcRenderer.invoke(IPC.runtimesTools, runtime, cwd),
+    accountUsage: async (runtime) => ipcRenderer.invoke(IPC.runtimesAccountUsage, runtime),
     listModels: async (runtime) => ipcRenderer.invoke(IPC.runtimesListModels, runtime),
   },
   sessions: {
+    diagnostics: async () => ipcRenderer.invoke(IPC.sessionDiagnostics),
     open: async (request) => ipcRenderer.invoke(IPC.sessionOpen, request),
     resume: async (handle) => ipcRenderer.invoke(IPC.sessionResume, handle),
     list: async () => ipcRenderer.invoke(IPC.sessionList),

@@ -8,14 +8,14 @@ runtime the same session contract and the same ordered record stream.
 ```
 ┌──────────── renderer (Chromium, sandboxed) ────────────┐
 │ React 19 · zustand · Tailwind 4                        │
-│ transcript = fold(oar events)                          │
+│ transcript = fold(oar records)                          │
 └────────────▲──────────────── window.rao ───────────────┘
              │ contextBridge (preload, CJS, sandbox: true)
 ┌────────────┴──────────── main (Electron/Node 24) ──────┐
 │ ipc/register.ts   typed ipcMain handlers, sender check │
 │ agents/host.ts    AgentHost: the only oar caller       │
 │   runtimes.require(id).session(installation, {cwd})    │
-│   session.events(observer)  → IPC session:event        │
+│   session.rawEvents(observer)  → IPC session:event        │
 │                             → sessions/store.ts (JSONL)│
 │   observeAgent(session)     → IPC session:status       │
 │ sessions/store.ts SessionStore: index.json + events    │
@@ -27,7 +27,7 @@ runtime the same session contract and the same ordered record stream.
 ## Processes
 
 **Main** owns the agents. `AgentHost` probes installations, opens sessions,
-and forwards oar's flat `Event`s and the derived agent status to the
+and forwards oar's complete `RawEvent`s and the derived agent status to the
 renderer. It is a plain class with a `Sink` interface, so moving it into an
 Electron `utilityProcess` later is a wiring change, not a rewrite. Nothing in
 main renders anything.
@@ -46,7 +46,7 @@ isolation and replayable from a recorded voyage log.
 
 Everything that crosses a process boundary is declared once in
 `src/shared/ipc.ts`: channel names, request and response shapes, and the
-`RaoApi` surface. The shapes reuse oar's own types (`Event`, `AgentStatus`,
+`RaoApi` surface. The shapes reuse oar's own types (`RawEvent`, `AgentStatus`,
 `InstallationSnapshot`, `ListModelsResult`, `SessionCapabilities`) so the
 renderer speaks the runtime's vocabulary with no translation layer to drift.
 The module has no Electron or Node imports and compiles in both tsconfigs.
@@ -58,7 +58,8 @@ The module has no Electron or Node imports and compiles in both tsconfigs.
 - **Control.** `prompt` when idle; `steerOrQueue` while a turn runs, so the
   user always learns where input landed (`steered`, `queued`, or `rejected`
   with the reason). `abort` interrupts; `dispose` releases the runtime.
-- **Observe.** `session.events()` is the consumer face: text, reasoning,
+- **Observe.** `session.rawEvents()` retains requests, responses and native
+  frames. OAR’s `reduceConversation` joins input identity and projects: text, reasoning,
   tool lifecycle, the runtime's own `turn_ended`, control rejections, the
   process exit. `observeAgent` + `simpleStateOf` collapse the stream into
   idle / busy / stuck / error for the status pill.
@@ -67,22 +68,55 @@ The module has no Electron or Node imports and compiles in both tsconfigs.
 
 ## Persistence
 
-oar deliberately has no "read session history" API: each runtime stores
-history in its own shape (codex `thread/read` turns, claude transcript
-jsonl, pi's history tree), none of which is the live wire format, so a
-provider-independent readback would need a second projection per runtime.
-Rao therefore keeps its own copy. `SessionStore` writes every `Event` the
+Rao owns its data for project management, search indexes, and rebuilding views.
+Runtime history is not the application's database.
+
+Project names, notes, and avatars live in `<userData>/rao.sqlite`, owned by
+`ProjectStore` in main through typed IPC. The renderer keeps an in-memory cache
+and changes it only after successful persistence. SQLite uses WAL, a five-second
+busy timeout, full synchronization, transactions, and schema version 1. This is
+phase one: validated details are a JSON column; project ID and current session
+handle are the same Rao handle (not the native runtime ID). The table also tracks
+creation/update times, pending creation/deletion, and persistent tombstones.
+
+Both development and packaged apps use `<appData>/Rao`; `RAO_USER_DATA` or an
+explicit `--user-data-dir=...` overrides that for tests. The single-instance lock
+is acquired before either store opens. Storage errors are surfaced instead of
+turning into an empty project list.
+
+Creation reserves metadata before starting a runtime and only returns success
+after the session and project are both persisted. A failure attempts cleanup;
+pending operations recover on restart. Deletion records its intent before
+removing the JSONL session, then retains a tombstone. It is not a transaction
+across SQLite and JSONL; a failed cleanup stays pending and retries at startup.
+
+At startup, the current origin's `rao-projects-v2` envelope is validated in full,
+backed up under `project-import-backups/`, and imported in one SQLite transaction.
+Legacy goal/context become note. Existing rows and tombstones win over imports.
+Completion is keyed by origin plus content digest, not a global migrated flag;
+an empty origin marks nothing complete. Neither localStorage nor existing JSONL
+is removed. The Projects home and Dashboard expose one-time **Export projects…**
+and **Import projects…** for transfer from another origin. These JSON files
+contain project details, not conversation logs, and must be imported with the
+matching Rao session data directory. Open the updated development app once to
+export old-origin data, then import from the installed app; no repeated switching
+is needed. Invalid imports remain retryable and cannot overwrite newer notes.
+
+`SessionStore` writes every `RawEvent` the
 live subscription delivered to `<userData>/sessions/<handle>.events.jsonl`
 (synchronous appends, crash-safe order) and the metadata to `index.json`
-(atomic rewrite). Because the stored log is the same flat `Event` stream the
-UI consumed live, replaying it through `appendEvent` rebuilds the transcript
-exactly; a change to the fold applies to old sessions too.
+(atomic rewrite). Each new log entry contains `{streamId, record}` so sequence
+numbers from different runtime instances never collide. OAR’s `reduceConversation`
+drives both replay and live updates, followed by Rao’s rendering fold. The reader
+still accepts historical flat events and `input_submission` entries. Buffered
+pushes merge with history using per-stream cursors, without duplicate messages.
 
 Continuing a stored session uses the runtime's native resume
 (`SessionOptions.resume` with the stored `sessionId`). The resumed live
 stream starts at seq 0 and does not replay history; the transcript on screen
 comes from rao's log, the agent's memory comes from the runtime's own store.
-`dispose` releases the runtime and keeps the record; `delete` removes both.
+`dispose` releases the runtime and keeps the record; project deletion coordinates
+JSONL removal and a SQLite tombstone through `ProjectService`.
 
 ## Permissions
 
@@ -109,9 +143,73 @@ opt-ins such as `OAR_CODEX_SANDBOX` are a planned setting.
 
 1. A "stop runtime" action separate from delete (the host already
    distinguishes `dispose` from `delete`; the UI only exposes delete).
-2. Optional raw voyage recording (`openVoyage` over `rawEvents`) as a debug
-   switch, kept apart from the Event log the UI depends on.
-3. Model picker backed by `runtime.listModels`, and account usage from
-   `runtime.accountUsage`.
+2. Optional export of the persisted raw records for debugging.
+3. Model selection when creating a project (the Dashboard already exposes
+   `runtime.listModels` and `runtime.accountUsage`).
 4. Move `AgentHost` into a `utilityProcess` to keep the pi SDK's process
    global state (undici dispatcher) out of main.
+
+## Runtime dashboard
+
+The renderer reads `runtimes.list`, `runtimes.listModels`, and
+`runtimes.accountUsage` through typed IPC. Usage/model reads pass a 15-second
+timeout to oar and preserve unsupported and authentication results. These
+reads do not open sessions. Queries settle independently and discard results
+when their view is unmounted or refreshed.
+
+`session.diagnostics` snapshots live oar sessions: model, capabilities, usage,
+context usage, graph and the latest 100 records. This is current-process data,
+not a reconstruction of persisted conversation history. Missing usage stays
+unknown rather than being represented as zero. Refreshing runtime installation
+information updates the creation dialog without reloading the session store.
+
+Inventory queries use oar 0.4.0 through three additional typed IPC channels:
+`runtimes.skills`, `runtimes.mcpServers`, and `runtimes.tools`. Main validates the
+runtime and optional cwd, verifies installation, and forwards a 15-second timeout.
+It neither opens nor resumes a project session. Omitted cwd is resolved to the
+user's home directory in main (not Electron's process cwd). The Dashboard loads
+all three global/default inventories automatically, with no directory selector.
+These are native home-context results, not a synthetic strict global-only filter.
+The project sidebar mounts the same panel on expansion, supplying the project's
+runtime and cwd; project identity changes remount it. Unmounting cancels UI
+acceptance of earlier responses; each category keeps its own result. Each category retains native coverage and partial-result
+markers, including MCP-only tools and absent schemas. Existing native queries
+cannot be canceled through oar; a discarded UI request can finish in the
+background within the query timeout.
+
+Runtime display names and SVG logos come from oar's browser-safe
+`@botiverse/oar/brands` export. `RuntimeLogo` renders bundled data URIs in the
+Dashboard, runtime selector, and project agent header. No remote icon fetch or
+runtime process is required. `runtimeBrandIcon(brand, theme)` selects artwork for
+the actual surface background, falling back to the default icon. Rao currently
+uses dark surfaces; it does not infer this from the OS theme. Project avatars
+remain independent user choices.
+
+### In-flight user input
+
+OAR supplies a logical input UUID shared across steer → queue fallback attempts.
+Rao persists full records and renders OAR conversation updates keyed by input
+identity. Requests appear immediately; responses and native echoes update the
+same bubble. Native message observations do not imply model consumption or
+semantic effect. Success acknowledgements are stored without a permanent badge.
+Unlinked native messages remain available in records; Rao does not match them
+by text or display them as duplicate bubbles. Cancellation remains deferred.
+
+## Packaging and migration verification
+
+`pnpm package` / `pnpm package:mac` stage the production dependency graph in
+`dist/package` using actual pnpm resolutions, including peers and nested versions.
+The builder archives and signs the final application; no post-signing asar edits
+are required. This preserves ACP's zod peer and distinct minimatch versions.
+
+After `pnpm check` and `pnpm package`, run:
+
+```sh
+pnpm test:app "release/0.1.0/mac-arm64/Rao.app/Contents/MacOS/Rao"
+```
+
+The smoke test creates an isolated data directory, imports legacy metadata from
+an HTTP origin, opens the real packaged window at a file origin, edits a note,
+restarts both builds, checks singleton rejection, and verifies unchanged JSONL.
+It exercises Electron's built-in SQLite and packaged OAR dependencies. It never
+restarts or replaces the user's installed application.

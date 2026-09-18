@@ -1,12 +1,26 @@
 import type { AgentStatus } from "@botiverse/oar";
+import { useProjects } from "./projects";
 import { create } from "zustand";
-import type { AgentState, OpenSessionRequest, RuntimeInfo, SessionSummary } from "@shared/ipc";
-import { appendEvent, emptyTranscript, type Transcript } from "./lib/transcript";
+import type {
+  AgentState,
+  OpenSessionRequest,
+  RuntimeInfo,
+  SessionSummary,
+  SessionEvent,
+} from "@shared/ipc";
+import {
+  appendSessionEvent,
+  emptyTranscriptState,
+  type Transcript,
+  type TranscriptState,
+} from "./lib/transcript";
 
 export interface SessionState {
   readonly summary: SessionSummary;
   /** Null until the stored log has been replayed (lazy, on first selection). */
   readonly transcript: Transcript | null;
+  readonly conversation: TranscriptState["conversation"];
+  readonly buffered: readonly SessionEvent[];
   readonly state: AgentState;
   readonly status: AgentStatus;
   readonly model: string | null;
@@ -22,7 +36,7 @@ interface Store {
   readonly error: string | null;
 
   readonly load: () => Promise<void>;
-  readonly openSession: (request: OpenSessionRequest) => Promise<void>;
+  readonly openSession: (request: OpenSessionRequest) => Promise<string | null>;
   readonly deleteSession: (handle: string) => Promise<void>;
   readonly select: (handle: string | null) => Promise<void>;
   readonly send: (handle: string, input: string) => Promise<void>;
@@ -38,6 +52,8 @@ function fresh(summary: SessionSummary, transcript: Transcript | null): SessionS
   return {
     summary,
     transcript,
+    conversation: emptyTranscriptState().conversation,
+    buffered: [],
     state: "idle",
     status: { kind: "idle" },
     model: summary.model ?? null,
@@ -53,28 +69,34 @@ export const useStore = create<Store>((set, get) => ({
   error: null,
 
   async load() {
+    set({ loaded: false, error: null });
     try {
       const [runtimes, summaries] = await Promise.all([api.runtimes.list(), api.sessions.list()]);
       const sessions: Record<string, SessionState> = {};
       for (const summary of summaries) {
-        sessions[summary.handle] = fresh(summary, null);
+        const current = get().sessions[summary.handle];
+        sessions[summary.handle] = current ? { ...current, summary } : fresh(summary, null);
       }
       set({ runtimes, sessions, order: summaries.map((summary) => summary.handle), loaded: true });
     } catch (error) {
-      set({ error: messageOf(error), loaded: true });
+      set({ error: messageOf(error), loaded: false });
     }
   },
 
   async openSession(request) {
     try {
       const summary = await api.sessions.open(request);
+      useProjects.getState().remember(summary.handle, request.project ?? { name: "", note: "" });
       set((store) => ({
-        sessions: { ...store.sessions, [summary.handle]: fresh(summary, emptyTranscript) },
+        sessions: { ...store.sessions, [summary.handle]: fresh(summary, null) },
         order: [summary.handle, ...store.order],
         active: summary.handle,
       }));
+      await get().select(summary.handle);
+      return summary.handle;
     } catch (error) {
       set({ error: messageOf(error) });
+      return null;
     }
   },
 
@@ -85,6 +107,7 @@ export const useStore = create<Store>((set, get) => ({
       set({ error: messageOf(error) });
       return;
     }
+    useProjects.getState().remove(handle);
     set((store) => {
       const { [handle]: _removed, ...sessions } = store.sessions;
       const order = store.order.filter((item) => item !== handle);
@@ -104,13 +127,25 @@ export const useStore = create<Store>((set, get) => ({
     }
     try {
       const events = await api.sessions.events(handle);
-      const transcript = events.reduce(appendEvent, emptyTranscript);
+      const replay = events.reduce(appendSessionEvent, emptyTranscriptState());
       set((store) => {
         const current = store.sessions[handle];
-        // Live events may have arrived meanwhile; they were folded onto null, so the replay wins.
+        if (current === undefined || current.transcript !== null) return store;
+        // Fold pushes that arrived while loading; OAR cursors deduplicate overlap.
+        const merged = (current?.buffered ?? []).reduce(appendSessionEvent, replay);
         return current === undefined
           ? store
-          : { sessions: { ...store.sessions, [handle]: { ...current, transcript } } };
+          : {
+              sessions: {
+                ...store.sessions,
+                [handle]: {
+                  ...current,
+                  transcript: merged.items,
+                  conversation: merged.conversation,
+                  buffered: [],
+                },
+              },
+            };
       });
     } catch (error) {
       set({ error: messageOf(error) });
@@ -163,19 +198,37 @@ export const useStore = create<Store>((set, get) => ({
         if (session === undefined) {
           return store;
         }
-        const summary =
-          event.kind === "turn_started" && session.summary.title === null
-            ? { ...session.summary, title: event.input.split("\n")[0] ?? event.input }
-            : session.summary;
-        const transcript =
-          session.transcript === null ? null : appendEvent(session.transcript, event);
-        if (transcript === session.transcript && summary === session.summary) {
-          return store;
+        if (session.transcript === null) {
+          return {
+            sessions: {
+              ...store.sessions,
+              [handle]: { ...session, buffered: [...session.buffered, event] },
+            },
+          };
         }
-        return { sessions: { ...store.sessions, [handle]: { ...session, transcript, summary } } };
+        const next = appendSessionEvent(
+          { items: session.transcript, conversation: session.conversation },
+          event,
+        );
+        const firstInput = next.items.find((item) => item.kind === "user");
+        const summary =
+          session.summary.title === null && firstInput?.kind === "user"
+            ? { ...session.summary, title: firstInput.text.split("\n")[0] ?? firstInput.text }
+            : session.summary;
+        return {
+          sessions: {
+            ...store.sessions,
+            [handle]: {
+              ...session,
+              transcript: next.items,
+              conversation: next.conversation,
+              summary,
+            },
+          },
+        };
       });
     });
-    const offStatus = api.sessions.onStatus(({ handle, state, status, model }) => {
+    const offStatus = api.sessions.onStatus(({ handle, state, status, model, context }) => {
       set((store) => {
         const session = store.sessions[handle];
         return session === undefined
@@ -183,7 +236,13 @@ export const useStore = create<Store>((set, get) => ({
           : {
               sessions: {
                 ...store.sessions,
-                [handle]: { ...session, state, status, model: model ?? session.model },
+                [handle]: {
+                  ...session,
+                  state,
+                  status,
+                  model: model ?? session.model,
+                  summary: { ...session.summary, context },
+                },
               },
             };
       });
@@ -198,7 +257,7 @@ export const useStore = create<Store>((set, get) => ({
                 ...store.sessions,
                 [handle]: {
                   ...session,
-                  summary: { ...session.summary, live: false, capabilities: null },
+                  summary: { ...session.summary, live: false, capabilities: null, context: null },
                   state: "idle",
                   status: { kind: "idle" },
                 },

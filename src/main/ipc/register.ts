@@ -1,3 +1,7 @@
+import type { ProjectStore } from "../projects/store";
+import { ProjectService } from "../projects/service";
+import { readFileSync, writeFileSync } from "node:fs";
+import { legacyProjects, projectId, parseProjectDetails } from "@shared/projects";
 /**
  * Typed ipcMain handlers. Each handler validates the sender and its
  * arguments before touching the AgentHost; the renderer is our own code,
@@ -16,14 +20,66 @@ import { IPC, isRuntimeId, type AppVersions, type OpenSessionRequest } from "@sh
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 
-export function registerIpc(host: AgentHost, getWindow: () => BrowserWindow | null): void {
+export function registerIpc(
+  host: AgentHost,
+  getWindow: () => BrowserWindow | null,
+  projects: ProjectStore,
+): void {
   const on = (channel: string, handler: Handler): void => {
     ipcMain.handle(channel, (event, ...args: unknown[]) => {
-      assertTrustedSender(event);
+      assertTrustedSender(event, getWindow());
       return handler(event, ...args);
     });
   };
 
+  const service = new ProjectService(host, projects);
+  const importProjects = (source: string, text: string) =>
+    projects.importLegacy(source, text, new Set(host.list().map((item) => item.handle)));
+  on(IPC.projectsList, () => projects.list());
+  on(IPC.projectsSave, (_event, id, details) => {
+    const handle = projectId(id);
+    if (!host.list().some((item) => item.handle === handle)) throw new Error("Unknown project");
+    return projects.save(handle, parseProjectDetails(details));
+  });
+  on(IPC.projectsImportLegacy, (event, text) => {
+    const url = new URL(event.senderFrame?.url ?? "");
+    return importProjects(
+      url.protocol === "file:" ? "file://" : url.origin,
+      expectString(text, "legacy data"),
+    );
+  });
+  on(IPC.projectsImportFile, async () => {
+    const options: OpenDialogOptions = {
+      properties: ["openFile"],
+      filters: [{ name: "Rao projects", extensions: ["json"] }],
+    };
+    const window = getWindow();
+    const picked = window
+      ? await dialog.showOpenDialog(window, options)
+      : await dialog.showOpenDialog(options);
+    const path = picked.filePaths[0];
+    return picked.canceled || !path
+      ? null
+      : importProjects("file-import", readFileSync(path, "utf8"));
+  });
+  on(IPC.projectsExport, async (_event, legacy) => {
+    const text =
+      legacy === undefined
+        ? JSON.stringify({ state: { details: projects.list() }, version: 1 }, null, 2)
+        : expectString(legacy, "legacy data");
+    legacyProjects(text);
+    const options = {
+      defaultPath: "Rao projects.json",
+      filters: [{ name: "Rao projects", extensions: ["json"] }],
+    };
+    const window = getWindow();
+    const picked = window
+      ? await dialog.showSaveDialog(window, options)
+      : await dialog.showSaveDialog(options);
+    if (picked.canceled || !picked.filePath) return false;
+    writeFileSync(picked.filePath, text, { mode: 0o600 });
+    return true;
+  });
   on(IPC.runtimesList, async () => host.listRuntimes());
   on(IPC.runtimesListModels, async (_event, runtime) => {
     if (!isRuntimeId(runtime)) {
@@ -32,7 +88,34 @@ export function registerIpc(host: AgentHost, getWindow: () => BrowserWindow | nu
     return host.listModels(runtime);
   });
 
-  on(IPC.sessionOpen, async (_event, request) => host.open(parseOpenRequest(request)));
+  on(IPC.runtimesAccountUsage, async (_event, runtime) => {
+    if (!isRuntimeId(runtime)) throw new TypeError("invalid runtime id");
+    return host.accountUsage(runtime);
+  });
+  for (const [channel, method] of [
+    [IPC.runtimesSkills, "skills"],
+    [IPC.runtimesMcpServers, "mcpServers"],
+    [IPC.runtimesTools, "tools"],
+  ] as const) {
+    on(channel, async (_event, runtime, cwd) => {
+      if (!isRuntimeId(runtime)) throw new TypeError("invalid runtime id");
+      if (
+        cwd !== undefined &&
+        (typeof cwd !== "string" || cwd.trim().length === 0 || cwd.includes("\0"))
+      ) {
+        throw new TypeError("cwd must be a non-empty directory path");
+      }
+      return host[method](runtime, cwd);
+    });
+  }
+  on(IPC.sessionDiagnostics, () => host.diagnostics());
+  on(IPC.sessionDelete, async (_event, handle) => {
+    const id = projectId(handle);
+    if (!projects.has(id) && !host.list().some((item) => item.handle === id))
+      throw new Error("Unknown project");
+    await service.remove(id);
+  });
+  on(IPC.sessionOpen, async (_event, request) => service.create(parseOpenRequest(request)));
   on(IPC.sessionResume, async (_event, handle) => host.resume(expectString(handle, "handle")));
   on(IPC.sessionList, () => host.list());
   on(IPC.sessionEvents, (_event, handle) => host.events(expectString(handle, "handle")));
@@ -64,14 +147,19 @@ export function registerIpc(host: AgentHost, getWindow: () => BrowserWindow | nu
   }));
 }
 
-function assertTrustedSender(event: IpcMainInvokeEvent): void {
-  const url = event.senderFrame?.url ?? "";
-  const devServer = process.env["ELECTRON_RENDERER_URL"];
-  const trusted =
-    url.startsWith("file://") || (devServer !== undefined && url.startsWith(devServer));
-  if (!trusted) {
-    throw new Error(`untrusted IPC sender: ${url}`);
-  }
+function assertTrustedSender(event: IpcMainInvokeEvent, window: BrowserWindow | null): void {
+  const frame = event.senderFrame;
+  if (
+    !window ||
+    event.sender !== window.webContents ||
+    frame !== window.webContents.mainFrame ||
+    frame.url !== window.webContents.getURL()
+  )
+    throw new Error("untrusted IPC sender");
+  const url = new URL(frame.url);
+  const dev = process.env["ELECTRON_RENDERER_URL"];
+  const trusted = dev ? url.origin === new URL(dev).origin : url.protocol === "file:";
+  if (!trusted) throw new Error("untrusted IPC sender");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -95,6 +183,7 @@ function parseOpenRequest(value: unknown): OpenSessionRequest {
   }
   const request: OpenSessionRequest = {
     runtime: record["runtime"],
+    ...(record["project"] === undefined ? {} : { project: parseProjectDetails(record["project"]) }),
     cwd: expectString(record["cwd"], "cwd"),
     ...(typeof record["model"] === "string" ? { model: record["model"] } : {}),
     ...(typeof record["resume"] === "string" ? { resume: record["resume"] } : {}),

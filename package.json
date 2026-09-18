@@ -9,7 +9,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "postinstall": "node scripts/ensure-electron.mjs",
-    "dev": "electron-vite dev",
+    "dev": "electron-vite dev --watch",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
@@ -21,13 +21,15 @@
     "format:check": "oxfmt --check",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "run-s typecheck lint format:check test",
+    "check": "run-s typecheck lint format:check test test:preload",
     "fix": "run-s 'lint -- --fix' format",
-    "package": "electron-vite build && electron-builder --dir",
-    "package:mac": "electron-vite build && electron-builder --mac"
+    "package": "electron-vite build && node scripts/package.mjs --dir",
+    "package:mac": "electron-vite build && node scripts/package.mjs --mac",
+    "test:preload": "electron-vite build && node scripts/check-preload.mjs",
+    "test:app": "node scripts/check-app.mjs"
   },
   "dependencies": {
-    "@botiverse/oar": "^0.2.0",
+    "@botiverse/oar": "^0.6.0",
     "lucide-react": "^1.46.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -42,6 +44,7 @@
     "electron": "44.3.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "jsdom": "^30.0.1",
     "npm-run-all2": "^9.0.3",
     "oxfmt": "^0.68.0",
     "oxlint": "^1.83.0",
