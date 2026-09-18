@@ -42,6 +42,20 @@ Electron. It receives events and folds them into a transcript
 (`src/shared/transcript.ts`, re-exported by the renderer), a pure function tested in
 isolation and replayable from a recorded voyage log.
 
+## Shell environment
+
+macOS launches GUI apps from launchd, so Rao starts with a minimal
+environment (`PATH=/usr/local/bin:/usr/bin:/bin:…`) and none of the variables a
+user exports from `.zshrc`: proxies, tokens, version managers. `shell-env.ts`
+runs the interactive login shell once at startup (`$SHELL -ilc`, five-second
+timeout) and merges its `env -0` output into `process.env`, which every `spawn`
+inherits. Shell values win, except `ELECTRON_*`/`RAO_*` and shell-internal keys
+(`PWD`, `SHLVL`, …); `PATH` is unioned with the shell first, so runtimes resolve
+tools the way the terminal does while a development launch keeps
+`node_modules/.bin`. Output is bracketed by markers so rc-file chatter cannot be
+parsed as environment data, and any failure degrades to the inherited
+environment. `RAO_SHELL_ENV=0` opts out.
+
 ## The contract in `src/shared`
 
 Everything that crosses a process boundary is declared once in

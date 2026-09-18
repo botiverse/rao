@@ -8,6 +8,7 @@ import { SessionStore } from "./sessions/store";
 import { registerIpc } from "./ipc/register";
 import { createMainWindow } from "./window";
 import { appIconPath } from "./app-icon";
+import { inheritShellEnvironment } from "./shell-env";
 import { IPC } from "@shared/ipc";
 
 app.setPath("userData", dataDirectory(app.getPath("appData")));
@@ -27,6 +28,9 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 function start(): void {
+  // Read the login shell in parallel with app startup; runtime processes are
+  // only spawned after the user acts, so awaiting it below is enough.
+  const shellEnvironment = inheritShellEnvironment();
   let mainWindow: BrowserWindow | null = null;
 
   const projects = new ProjectStore(join(app.getPath("userData"), "rao.sqlite"));
@@ -58,6 +62,7 @@ function start(): void {
 
   async function main(): Promise<void> {
     await app.whenReady();
+    await shellEnvironment;
 
     // Packaged macOS apps use the ICNS; development otherwise shows Electron.
     if (process.platform === "darwin" && !app.isPackaged) {
