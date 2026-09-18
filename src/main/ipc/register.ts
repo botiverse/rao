@@ -73,6 +73,13 @@ export function registerIpc(
       throw new Error("Unknown project");
     await service.remove(id);
   });
+  on(IPC.sessionSwitchRuntime, async (_event, handle, runtime) => {
+    const id = projectId(handle);
+    if (!isRuntimeId(runtime)) throw new TypeError("invalid runtime id");
+    const project = projects.list()[id];
+    if (!project) throw new Error("Unknown project");
+    return host.switchRuntime(id, runtime, project.note);
+  });
   on(IPC.sessionOpen, async (_event, request) => service.create(parseOpenRequest(request)));
   on(IPC.sessionResume, async (_event, handle) => host.resume(expectString(handle, "handle")));
   on(IPC.sessionList, () => host.list());

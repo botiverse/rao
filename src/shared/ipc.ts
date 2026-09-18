@@ -57,6 +57,8 @@ export interface OpenSessionRequest {
  * the storage file name); `sessionId` is the runtime-native id used to resume.
  */
 export interface SessionRecord {
+  readonly handoffId?: string;
+  readonly runtimeModels?: Partial<Record<RuntimeId, string>>;
   readonly handle: string;
   readonly runtime: RuntimeId;
   readonly sessionId: string;
@@ -107,8 +109,23 @@ export interface SessionStreamRecord {
   readonly record: RawEvent;
 }
 
+/** Application-level handoff marker; never presented as a native runtime event. */
+export interface RuntimeHandoff {
+  readonly kind: "runtime_handoff";
+  readonly id: string;
+  readonly receivedAt: number;
+  readonly from: RuntimeId;
+  readonly to: RuntimeId;
+  readonly previousSessionId: string;
+  readonly sessionId: string;
+  readonly requestId: string;
+  readonly markdown: string;
+  readonly model?: string;
+  readonly runtimeModels: Partial<Record<RuntimeId, string>>;
+}
+
 /** Flat events/submissions are read-only legacy history. New writes contain records. */
-export type SessionEvent = Event | InputSubmission | SessionStreamRecord;
+export type SessionEvent = Event | InputSubmission | SessionStreamRecord | RuntimeHandoff;
 
 export interface SessionEventMessage {
   readonly handle: string;
@@ -160,6 +177,7 @@ export const IPC = {
   sessionDiagnostics: "session:diagnostics",
   runtimesListModels: "runtimes:listModels",
   sessionOpen: "session:open",
+  sessionSwitchRuntime: "session:switchRuntime",
   sessionResume: "session:resume",
   sessionList: "session:list",
   sessionEvents: "session:events",
@@ -192,6 +210,7 @@ export interface RaoApi {
     accountUsage(runtime: RuntimeId): Promise<AccountUsageSnapshot>;
   };
   readonly sessions: {
+    switchRuntime(handle: string, runtime: RuntimeId): Promise<SessionSummary>;
     diagnostics(): Promise<readonly SessionDiagnostics[]>;
     open(request: OpenSessionRequest): Promise<SessionSummary>;
     /** Reattach a runtime to a stored session via its native resume. */

@@ -14,7 +14,11 @@ it("recovers interrupted creation and retries failed deletion without legacy res
     .fn()
     .mockRejectedValueOnce(new Error("file busy"))
     .mockResolvedValue(undefined);
-  const host = { list: () => [{ handle: "created" }], delete: deleted } as unknown as AgentHost;
+  const host = {
+    assertAvailable: vi.fn(),
+    list: () => [{ handle: "created" }],
+    delete: deleted,
+  } as unknown as AgentHost;
   const service = new ProjectService(host, projects);
   try {
     projects.create("created", { name: "Created", note: "" });
@@ -36,6 +40,7 @@ it("cleans up a created session if final metadata persistence fails", async () =
   const projects = new ProjectStore(join(dir, "rao.sqlite"));
   const deleted = vi.fn().mockResolvedValue(undefined);
   const host = {
+    assertAvailable: vi.fn(),
     open: vi.fn().mockResolvedValue({ handle: "irrelevant" }),
     delete: deleted,
   } as unknown as AgentHost;

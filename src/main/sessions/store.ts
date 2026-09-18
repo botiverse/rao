@@ -10,6 +10,7 @@
  */
 import {
   closeSync,
+  fsyncSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -21,7 +22,12 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { eventsOf } from "@botiverse/oar/observe";
-import { isRuntimeId, type SessionRecord, type SessionEvent } from "@shared/ipc";
+import {
+  isRuntimeId,
+  type SessionRecord,
+  type SessionEvent,
+  type RuntimeHandoff,
+} from "@shared/ipc";
 
 const INDEX_FILE = "index.json";
 /** First line of every events file; bump when the stored Event vocabulary changes incompatibly. */
@@ -74,7 +80,11 @@ export class SessionStore {
     }
     writeSync(fd, `${JSON.stringify(event)}\n`);
 
-    const next: SessionRecord = { ...record, updatedAt: event.receivedAt };
+    if (event.kind === "runtime_handoff") fsyncSync(fd);
+    const next: SessionRecord =
+      event.kind === "runtime_handoff"
+        ? bindHandoff(record, event)
+        : { ...record, updatedAt: event.receivedAt };
     for (const fact of event.kind === "record" ? eventsOf(event.record) : [event]) {
       if (fact.kind === "turn_started" && next.title === null)
         Object.assign(next, { title: titleOf(fact.input) });
@@ -184,7 +194,22 @@ export class SessionStore {
     if (!Array.isArray(parsed) || !parsed.every(isSessionRecord)) {
       throw new Error("Invalid session index; restore its backup before opening Rao");
     }
-    for (const entry of parsed) this.#records.set(entry.handle, entry);
+    for (const entry of parsed) {
+      this.#records.set(entry.handle, entry);
+      const events = this.readEvents(entry.handle);
+      const last = events.findLastIndex((event) => event.kind === "runtime_handoff");
+      const handoff = events[last];
+      if (handoff?.kind === "runtime_handoff" && entry.handoffId !== handoff.id) {
+        // The journal is the commit point; recover if index flush was interrupted.
+        const current = bindHandoff(entry, handoff);
+        for (const event of events.slice(last + 1)) {
+          for (const fact of event.kind === "record" ? eventsOf(event.record) : [event]) {
+            if (fact.kind === "model") Object.assign(current, { model: fact.model });
+          }
+        }
+        this.#records.set(entry.handle, current);
+      }
+    }
   }
 
   #scheduleFlush(): void {
@@ -227,6 +252,23 @@ function isRecordObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isEvent(value: unknown): value is SessionEvent {
+  if (isRecordObject(value) && value.kind === "runtime_handoff") {
+    return (
+      typeof value.id === "string" &&
+      typeof value.receivedAt === "number" &&
+      isRuntimeId(value.from) &&
+      isRuntimeId(value.to) &&
+      typeof value.previousSessionId === "string" &&
+      typeof value.sessionId === "string" &&
+      typeof value.requestId === "string" &&
+      typeof value.markdown === "string" &&
+      (value.model === undefined || typeof value.model === "string") &&
+      isRecordObject(value.runtimeModels) &&
+      Object.entries(value.runtimeModels).every(
+        ([runtime, model]) => isRuntimeId(runtime) && typeof model === "string",
+      )
+    );
+  }
   if (isRecordObject(value) && value["kind"] === "record") {
     const raw = value["record"];
     return (
@@ -274,4 +316,18 @@ function isSessionRecord(value: unknown): value is SessionRecord {
     typeof value["openedAt"] === "number" &&
     typeof value["updatedAt"] === "number"
   );
+}
+
+function bindHandoff(record: SessionRecord, event: RuntimeHandoff): SessionRecord {
+  const { model: _previousModel, ...rest } = record;
+  return {
+    ...rest,
+    runtime: event.to,
+    sessionId: event.sessionId,
+    handoffId: event.id,
+    runtimeModels: event.runtimeModels,
+    promptAttempted: true,
+    updatedAt: event.receivedAt,
+    ...(event.model === undefined ? {} : { model: event.model }),
+  };
 }

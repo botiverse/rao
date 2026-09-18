@@ -27,7 +27,7 @@ Electron client for coding agents, driven through `@botiverse/oar`. Read
 - The renderer is sandboxed: no Node, no Electron, no `require`. Talk to main
   through `window.rao` only.
 - Transcript state is a pure fold over OAR records using its conversation reducer in
-  `src/renderer/src/lib/transcript.ts`. Extend the fold and its tests rather
+  `src/shared/transcript.ts` (re-exported by `src/renderer/src/lib/transcript.ts`). Extend the fold and its tests rather
   than mutating transcript items from components.
 - Tool call identity is `(agentPath, callId)`, never `callId` alone.
 - Do not synthesize facts the runtime did not report (turn boundaries,

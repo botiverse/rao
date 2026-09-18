@@ -1,3 +1,5 @@
+import { initialStatus, reduceStatus } from "@botiverse/oar/observe";
+import { handoffMarkdown } from "@shared/handoff";
 import { homedir } from "node:os";
 /**
  * AgentHost: the one place in main that talks to oar. It probes runtimes,
@@ -24,6 +26,7 @@ import {
   type Session,
 } from "@botiverse/oar";
 import type {
+  RuntimeHandoff,
   ControlOutcome,
   SessionEvent,
   OpenSessionRequest,
@@ -57,6 +60,116 @@ export class AgentHost {
   readonly #sink: Sink;
   readonly #store: SessionStore;
   readonly #live = new Map<string, Live>();
+  readonly #operations = new Map<string, Promise<unknown>>();
+  #closing = false;
+
+  assertAvailable(handle: string): void {
+    if (this.#closing) throw new Error("Rao is shutting down");
+    if (this.#operations.has(handle)) throw new Error("A project operation is already in progress");
+  }
+
+  async #operation<T>(handle: string, run: () => Promise<T>): Promise<T> {
+    this.assertAvailable(handle);
+    const finished = Promise.withResolvers<void>();
+    this.#operations.set(handle, finished.promise);
+    try {
+      return await run();
+    } finally {
+      this.#operations.delete(handle);
+      finished.resolve();
+    }
+  }
+
+  resume(handle: string): Promise<SessionSummary> {
+    return this.#operation(handle, () => this.#resume(handle));
+  }
+  prompt(handle: string, input: string): Promise<ControlOutcome> {
+    return this.#operation(handle, () => this.#prompt(handle, input));
+  }
+  steerOrQueue(handle: string, input: string): Promise<ControlOutcome> {
+    return this.#operation(handle, () => this.#steerOrQueue(handle, input));
+  }
+  abort(handle: string): Promise<ControlOutcome> {
+    return this.#operation(handle, () => this.#abort(handle));
+  }
+  dispose(handle: string): Promise<void> {
+    return this.#operation(handle, () => this.#dispose(handle));
+  }
+  delete(handle: string): Promise<void> {
+    return this.#operation(handle, () => this.#delete(handle));
+  }
+
+  switchRuntime(handle: string, target: RuntimeId, note: string): Promise<SessionSummary> {
+    return this.#operation(handle, async () => {
+      const previous = this.#requireRecord(handle);
+      if (previous.runtime === target) throw new Error("Choose a different runtime");
+      const old = this.#live.get(handle);
+      if (
+        old &&
+        old.session
+          .records()
+          .reduce((state, record) => reduceStatus(state, record, old.session.id), initialStatus)
+          .kind !== "idle"
+      ) {
+        throw new Error("Wait for the current turn to finish before switching runtimes");
+      }
+      const originalRecordCount = old?.session.records().length;
+      const markdown = handoffMarkdown(this.#store.readEvents(handle), note);
+      const runtimeModels = {
+        ...previous.runtimeModels,
+        ...(previous.model === undefined ? {} : { [previous.runtime]: previous.model }),
+      };
+      const model = runtimeModels[target];
+      const runtime = runtimes.require(target);
+      const installation = await requireAvailable(runtime);
+      const next = await runtime.session(installation, {
+        cwd: previous.cwd,
+        ...(model === undefined ? {} : { model }),
+      });
+      let committed = false;
+      try {
+        // A normal first prompt works for every adapter, including those without
+        // appendSystemPrompt. Keep its records private until the handoff commits.
+        const result = await next.prompt(markdown);
+        const outcome = toOutcome(result);
+        if (!outcome.accepted) throw new Error(`Handoff rejected: ${outcome.reason}`);
+        if (
+          next
+            .records()
+            .some((record) => record.kind === "response" && record.body.kind === "exited")
+        )
+          throw new Error("The target runtime exited during handoff");
+        if (
+          old &&
+          (old.session.records().length !== originalRecordCount || this.#live.get(handle) !== old)
+        )
+          throw new Error(
+            "The current conversation changed during handoff. Try again after it settles.",
+          );
+        const handoff: RuntimeHandoff = {
+          kind: "runtime_handoff",
+          id: crypto.randomUUID(),
+          receivedAt: Date.now(),
+          from: previous.runtime,
+          to: target,
+          previousSessionId: previous.sessionId,
+          sessionId: next.id,
+          requestId: result.request.id,
+          markdown,
+          runtimeModels,
+          ...(model === undefined ? {} : { model }),
+        };
+        await this.#dispose(handle);
+        this.#store.append(handle, handoff);
+        committed = true;
+        this.#sink.event({ handle, event: handoff });
+        this.#attach(handle, next);
+        return this.#summary(this.#requireRecord(handle));
+      } finally {
+        if (!committed) await next.dispose();
+      }
+    });
+  }
 
   constructor(sink: Sink, store: SessionStore) {
     this.#sink = sink;
@@ -172,7 +285,7 @@ export class AgentHost {
   }
 
   /** Reattach a runtime to a stored session through the runtime's native resume. */
-  async resume(handle: string): Promise<SessionSummary> {
+  async #resume(handle: string): Promise<SessionSummary> {
     const record = this.#requireRecord(handle);
     if (this.#live.has(handle)) {
       return this.#summary(record);
@@ -208,13 +321,13 @@ export class AgentHost {
     return this.#store.readEvents(handle);
   }
 
-  async prompt(handle: string, input: string): Promise<ControlOutcome> {
+  async #prompt(handle: string, input: string): Promise<ControlOutcome> {
     const { session } = this.#requireLive(handle);
     this.#store.markPromptAttempted(handle);
     return toOutcome(await session.prompt(input));
   }
 
-  async steerOrQueue(handle: string, input: string): Promise<ControlOutcome> {
+  async #steerOrQueue(handle: string, input: string): Promise<ControlOutcome> {
     const { session } = this.#requireLive(handle);
     this.#store.markPromptAttempted(handle);
     const landed = await session.steerOrQueue(input);
@@ -223,12 +336,12 @@ export class AgentHost {
       : toOutcome(landed.result);
   }
 
-  async abort(handle: string): Promise<ControlOutcome> {
+  async #abort(handle: string): Promise<ControlOutcome> {
     return toOutcome(await this.#requireLive(handle).session.abort());
   }
 
   /** Release the runtime; the stored session stays and can be resumed. */
-  async dispose(handle: string): Promise<void> {
+  async #dispose(handle: string): Promise<void> {
     const live = this.#live.get(handle);
     if (live === undefined) {
       return;
@@ -242,15 +355,17 @@ export class AgentHost {
   }
 
   /** Release the runtime if live and remove the stored session. */
-  async delete(handle: string): Promise<void> {
-    await this.dispose(handle);
+  async #delete(handle: string): Promise<void> {
+    await this.#dispose(handle);
     if (this.#store.get(handle) !== undefined) {
       this.#store.remove(handle);
     }
   }
 
   async disposeAll(): Promise<void> {
-    await Promise.allSettled([...this.#live.keys()].map(async (handle) => this.dispose(handle)));
+    this.#closing = true;
+    await Promise.allSettled(this.#operations.values());
+    await Promise.allSettled([...this.#live.keys()].map(async (handle) => this.#dispose(handle)));
   }
 
   #attach(handle: string, session: Session): void {
@@ -262,7 +377,7 @@ export class AgentHost {
         if (record.kind === "response" && record.body.kind === "exited") {
           exited = true;
           const live = this.#live.get(handle);
-          if (live !== undefined) this.#release(handle, live);
+          if (live?.session === session) this.#release(handle, live);
           this.#sink.closed({
             handle,
             reason: `runtime exited (code ${String(record.body.code)})`,

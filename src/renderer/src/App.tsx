@@ -1,8 +1,8 @@
+import { RuntimeSwitcher } from "./components/RuntimeSwitcher";
 import { ContextUsageIndicator } from "./components/ContextUsageIndicator";
 import { RuntimeLogo } from "./components/RuntimeLogo";
 import { useEffect, useState } from "react";
 import { ArrowRight, ChevronRight, Layers3, LoaderCircle, PanelRight, Plus } from "lucide-react";
-import { runtimeBrands } from "@botiverse/oar/brands";
 import { AvatarPicker, ProjectAvatar } from "./components/ProjectAvatar";
 import { Dashboard } from "./components/Dashboard";
 import { Composer } from "./components/Composer";
@@ -168,9 +168,7 @@ export function App() {
               >
                 <div className="flex items-center gap-2 border-b border-line/60 px-7 py-3">
                   <RuntimeLogo runtime={session.summary.runtime} />
-                  <span className="min-w-0 flex-1 truncate text-xs">
-                    {runtimeBrands[session.summary.runtime].name}
-                  </span>
+                  <RuntimeSwitcher session={session} />
                   <ContextUsageIndicator
                     usage={session.summary.context ?? null}
                     live={session.summary.live}
@@ -189,6 +187,7 @@ export function App() {
                   <Transcript items={session.transcript} />
                 )}
                 <Composer
+                  disabled={store.switching.includes(session.summary.handle)}
                   state={session.state}
                   live={session.summary.live}
                   canSteer={session.summary.capabilities?.steer ?? false}

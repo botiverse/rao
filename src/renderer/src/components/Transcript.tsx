@@ -1,3 +1,4 @@
+import { HandoffCard } from "./HandoffCard";
 import { ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { TranscriptItem } from "../lib/transcript";
@@ -50,6 +51,8 @@ function AgentTag({ path }: { path: readonly string[] }) {
 
 function Item({ item }: { item: TranscriptItem }) {
   switch (item.kind) {
+    case "runtime_handoff":
+      return <HandoffCard handoff={item} />;
     case "user": {
       const state = item.delivery?.state ?? item.submission?.state;
       const label =

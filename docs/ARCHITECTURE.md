@@ -39,7 +39,7 @@ CommonJS so the renderer can stay sandboxed (`sandbox: true`,
 
 **Renderer** is a normal Vite + React app. It never imports Node or
 Electron. It receives events and folds them into a transcript
-(`src/renderer/src/lib/transcript.ts`), a pure function tested in
+(`src/shared/transcript.ts`, re-exported by the renderer), a pure function tested in
 isolation and replayable from a recorded voyage log.
 
 ## The contract in `src/shared`
@@ -210,3 +210,45 @@ and the real packaged window at a file origin, edits a note,
 restarts both builds, checks singleton rejection, and verifies unchanged JSONL.
 It exercises Electron's built-in SQLite and packaged OAR dependencies. It never
 restarts or replaces the user's installed application.
+
+## Runtime handoff
+
+The Rao handle remains the stable project/conversation ID; it is independent of
+its current native session ID. Switching runtime always opens a fresh native
+session, including switching back to a previously used runtime. SQLite project
+metadata and the project's JSONL path remain unchanged. Historical native session
+IDs stay in the record envelopes and handoff markers.
+
+The main process reads the saved project note and folds the complete project log
+using the same shared transcript projection as the UI. It exports user/assistant
+messages and tool calls as Markdown, omitting tool results and reasoning.
+Previous handoff prompts are excluded by request/session identity, and previous
+markers contribute only their runtime transition, so repeated handoffs do not
+nest or duplicate historical payloads. A 512 KB UTF-8 transport guard rejects an
+oversized export without truncation; this is not a model context-window estimate.
+
+The payload is a normal first prompt, so adapters without system-prompt injection
+are supported. It asks the receiving agent to acknowledge context and wait for
+the next user message. Prompt acceptance is the preparation criterion; later
+model/provider errors are displayed as ordinary runtime errors. Model settings
+are remembered independently for each runtime.
+
+Handoffs are allowed only with no running turn. A main-process operation guard
+blocks competing sends, resume, delete and handoff requests while preparation is
+in progress. A source that changes during preparation invalidates the transfer.
+Preparation failure disposes the candidate and preserves the source binding.
+After acceptance, the old runtime is disposed and a `runtime_handoff` marker is
+appended and fsynced to the existing log. The marker is the commit point; startup
+recovers the current binding from it if the debounced index flush was interrupted.
+An I/O failure after source disposal can require resuming the old binding; the
+source history is retained. Native adapter session creation/prompt calls are not
+transactions with the filesystem and can leave an unused native session after a
+process crash before commit.
+
+The accepted native records are then replayed into the project log. The prompt
+itself is represented by a handoff card rather than a duplicate user bubble.
+Clicking the card opens a modal containing the exact Markdown sent to the runtime.
+Native dialog focus containment and Escape dismissal support keyboard access.
+The composer is disabled during preparation; existing project metadata and
+conversation stay visible. Normal app restart resumes the currently bound native
+session; explicit runtime switching never resumes an earlier one.

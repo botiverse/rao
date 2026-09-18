@@ -4,6 +4,7 @@ import { mentionsNote } from "../lib/projects";
 import type { AgentState } from "@shared/ipc";
 
 export function Composer({
+  disabled = false,
   state,
   live,
   canSteer,
@@ -11,6 +12,7 @@ export function Composer({
   onSend,
   onAbort,
 }: {
+  disabled?: boolean;
   state: AgentState;
   live: boolean;
   canSteer: boolean;
@@ -26,7 +28,7 @@ export function Composer({
   const trimmed = value.trim();
 
   const send = (): void => {
-    if (trimmed === "") {
+    if (disabled || trimmed === "") {
       return;
     }
     onSend(trimmed);
@@ -55,6 +57,7 @@ export function Composer({
       ) : null}
       <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-xl border border-line bg-bg-raised p-2 focus-within:border-line-strong">
         <textarea
+          disabled={disabled}
           ref={textarea}
           value={value}
           rows={1}
@@ -82,6 +85,7 @@ export function Composer({
         {busy ? (
           <button
             type="button"
+            disabled={disabled}
             onClick={onAbort}
             aria-label="Abort turn"
             className="rounded-lg bg-danger/15 p-1.5 text-danger hover:bg-danger/25"
@@ -92,7 +96,7 @@ export function Composer({
         <button
           type="button"
           onClick={send}
-          disabled={trimmed === ""}
+          disabled={disabled || trimmed === ""}
           aria-label="Send"
           className="rounded-lg bg-accent p-1.5 text-bg disabled:opacity-30"
         >

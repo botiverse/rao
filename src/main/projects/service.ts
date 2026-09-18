@@ -28,6 +28,7 @@ export class ProjectService {
     }
   }
   async remove(id: string): Promise<void> {
+    this.host.assertAvailable(id);
     this.projects.remove(id);
     await this.host.delete(id);
     this.projects.finishRemove(id);

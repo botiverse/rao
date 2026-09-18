@@ -25,6 +25,8 @@ const api: RaoApi = {
     listModels: async (runtime) => ipcRenderer.invoke(IPC.runtimesListModels, runtime),
   },
   sessions: {
+    switchRuntime: async (handle, runtime) =>
+      ipcRenderer.invoke(IPC.sessionSwitchRuntime, handle, runtime),
     diagnostics: async () => ipcRenderer.invoke(IPC.sessionDiagnostics),
     open: async (request) => ipcRenderer.invoke(IPC.sessionOpen, request),
     resume: async (handle) => ipcRenderer.invoke(IPC.sessionResume, handle),

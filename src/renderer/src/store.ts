@@ -5,6 +5,7 @@ import type {
   AgentState,
   OpenSessionRequest,
   RuntimeInfo,
+  RuntimeId,
   SessionSummary,
   SessionEvent,
 } from "@shared/ipc";
@@ -27,6 +28,8 @@ export interface SessionState {
 }
 
 interface Store {
+  readonly switching: readonly string[];
+  readonly switchRuntime: (handle: string, runtime: RuntimeId) => Promise<void>;
   readonly runtimes: readonly RuntimeInfo[];
   readonly loaded: boolean;
   readonly sessions: Readonly<Record<string, SessionState>>;
@@ -61,6 +64,30 @@ function fresh(summary: SessionSummary, transcript: Transcript | null): SessionS
 }
 
 export const useStore = create<Store>((set, get) => ({
+  switching: [],
+  async switchRuntime(handle, runtime) {
+    const session = get().sessions[handle];
+    if (!session || get().switching.includes(handle)) return;
+    set((store) => ({ switching: [...store.switching, handle], error: null }));
+    try {
+      const summary = await api.sessions.switchRuntime(handle, runtime);
+      set((store) => {
+        const current = store.sessions[handle];
+        return current
+          ? {
+              sessions: {
+                ...store.sessions,
+                [handle]: { ...current, summary, model: summary.model ?? null },
+              },
+            }
+          : store;
+      });
+    } catch (error) {
+      set({ error: messageOf(error) });
+    } finally {
+      set((store) => ({ switching: store.switching.filter((id) => id !== handle) }));
+    }
+  },
   runtimes: [],
   loaded: false,
   sessions: {},
@@ -153,6 +180,7 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   async send(handle, input) {
+    if (get().switching.includes(handle)) return;
     const session = get().sessions[handle];
     if (session === undefined) {
       return;
@@ -211,10 +239,22 @@ export const useStore = create<Store>((set, get) => ({
           event,
         );
         const firstInput = next.items.find((item) => item.kind === "user");
+        const { model: _previousModel, ...summaryWithoutModel } = session.summary;
         const summary =
-          session.summary.title === null && firstInput?.kind === "user"
-            ? { ...session.summary, title: firstInput.text.split("\n")[0] ?? firstInput.text }
-            : session.summary;
+          event.kind === "runtime_handoff"
+            ? {
+                ...summaryWithoutModel,
+                runtime: event.to,
+                sessionId: event.sessionId,
+                handoffId: event.id,
+                ...(event.model === undefined ? {} : { model: event.model }),
+                live: false,
+                context: null,
+                capabilities: null,
+              }
+            : session.summary.title === null && firstInput?.kind === "user"
+              ? { ...session.summary, title: firstInput.text.split("\n")[0] ?? firstInput.text }
+              : session.summary;
         return {
           sessions: {
             ...store.sessions,
