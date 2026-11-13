@@ -2,9 +2,7 @@
   <img src="build/icon.png" alt="Rao logo" width="96" height="96">
 </p>
 
-# Rao
-
-[![Built with Raft](https://raw.githubusercontent.com/raft-builders/awesome-raft-build/main/badge/built-with-raft.svg)](https://raft.build)
+# Rao [![Built with Raft](https://raw.githubusercontent.com/raft-builders/awesome-raft-build/main/badge/built-with-raft.svg)](https://raft.build)
 
 An elegant local desktop agent workspace built on [oar](https://github.com/botiverse/oar).
 
