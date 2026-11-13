@@ -4,6 +4,8 @@
 
 # Rao
 
+[![Built with Raft](https://raw.githubusercontent.com/raft-builders/awesome-raft-build/main/badge/built-with-raft.svg)](https://raft.build)
+
 An elegant local desktop agent workspace built on [oar](https://github.com/botiverse/oar).
 
 Project first: each project is a long-running maintainer agent with an ongoing
